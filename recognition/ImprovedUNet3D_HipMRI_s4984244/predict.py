@@ -364,8 +364,7 @@ def main():
         raise ValueError(f"Checkpoints were trained at different shapes: {shapes}")
     shape = shapes.pop()
 
-    cache = Path(args.cache) / f"hipmri_{'x'.join(map(str, shape))}.pt"
-    scans, names = load_split_scans(args.root, cache, shape)
+    scans, names = load_split_scans(args.root, args.cache, shape)
     test_names = names["test"][:args.limit] if args.limit else names["test"]
     paths = {key_to_name((p["case"], p["week"])): p["image"] for p in find_pairs(args.root)}
 

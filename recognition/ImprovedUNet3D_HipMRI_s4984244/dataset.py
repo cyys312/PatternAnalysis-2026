@@ -45,8 +45,12 @@ LABEL_DIR = "semantic_labels_only"
 CLASS_NAMES = ("background", "body", "bone", "bladder", "rectum", "prostate")
 NUM_CLASSES = len(CLASS_NAMES)
 
-# Volumes are stored as (D, H, W) after loading, where D is the slice axis.
-TARGET_SHAPE = (64, 128, 128)
+# Volumes are stored as (D, H, W) after loading, where D is the axial slice
+# axis. Raw scans are 128 x 256 x 256 at about 1.56 x 1.68 x 1.68 mm. The 128
+# axial slices are kept as acquired - the prostate spans only 17-41 of them
+# (median 25), and the apex/base slices are exactly what we want to study -
+# while the in-plane resolution is halved to fit the 3D model in memory.
+TARGET_SHAPE = (128, 128, 128)
 
 SPLIT_FILE = Path(__file__).with_name("splits.json")
 
@@ -213,14 +217,16 @@ def build_cache(pairs, cache_path, shape=TARGET_SHAPE):
     return scans
 
 
-def load_split_scans(root, cache_path, shape=TARGET_SHAPE):
+def load_split_scans(root, cache_dir, shape=TARGET_SHAPE):
     """
-    Load (or build) the cache and group scan names by split.
+    Load (or build) the cache for ``shape`` in ``cache_dir`` and group scan
+    names by split.
 
     Returns (scans, names_by_split) where ``scans`` maps name -> (image, label).
     """
     pairs = find_pairs(root)
     split = load_or_create_split(pairs)
+    cache_path = Path(cache_dir) / f"hipmri_{'x'.join(map(str, shape))}.pt"
     scans = build_cache(pairs, cache_path, shape)
 
     case_to_split = {c: s for s, cases in split.items() for c in cases}
@@ -335,7 +341,7 @@ def audit(root):
 
     shapes, spacings, orientations = Counter(), Counter(), Counter()
     class_voxels = torch.zeros(NUM_CLASSES, dtype=torch.float64)
-    bad_labels = []
+    prostate_slices, bad_labels = [], []
     for p in pairs:
         img = nib.load(str(p["image"]))
         shapes[img.shape] += 1
@@ -347,6 +353,9 @@ def audit(root):
             bad_labels.append(key_to_name((p["case"], p["week"])))
         class_voxels += torch.bincount(label.clamp(0, NUM_CLASSES - 1).flatten(),
                                        minlength=NUM_CLASSES).double()
+        # How many axial slices the gland spans decides how far z can be downsampled.
+        is_prostate = label == CLASS_NAMES.index("prostate")
+        prostate_slices.append(int(is_prostate.any(dim=2).any(dim=1).sum()))
 
     print("Shapes (x, y, z):", dict(shapes))
     print("Voxel spacing (mm):", dict(spacings))
@@ -355,6 +364,10 @@ def audit(root):
     total = class_voxels.sum()
     for name, count in zip(CLASS_NAMES, class_voxels):
         print(f"  {name:<10} {100 * count / total:6.2f}% of voxels")
+    prostate_slices.sort()
+    print(f"Prostate spans {prostate_slices[0]}-{prostate_slices[-1]} axial slices "
+          f"(median {prostate_slices[len(prostate_slices) // 2]}); "
+          f"{prostate_slices.count(0)} scans have no prostate")
 
     split = patient_split(weeks)
     for name, cases in split.items():
@@ -363,6 +376,15 @@ def audit(root):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Audit the HipMRI 3D dataset")
+    parser = argparse.ArgumentParser(description="Audit or pre-process the HipMRI 3D dataset")
     parser.add_argument("--root", default=DEFAULT_ROOT)
-    audit(parser.parse_args().root)
+    parser.add_argument("--prepare", metavar="CACHE_DIR",
+                        help="instead of auditing, create splits.json and the "
+                             "pre-processed cache in CACHE_DIR (run on a CPU node "
+                             "so GPU jobs start training straight away)")
+    args = parser.parse_args()
+    if args.prepare:
+        scans, names = load_split_scans(args.root, args.prepare)
+        print({split: len(n) for split, n in names.items()}, "scans cached")
+    else:
+        audit(args.root)

@@ -125,8 +125,7 @@ def main():
     out_dir = Path(args.out) / args.model
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    cache = Path(args.cache) / f"hipmri_{'x'.join(map(str, args.shape))}.pt"
-    scans, names = load_split_scans(args.root, cache, args.shape)
+    scans, names = load_split_scans(args.root, args.cache, args.shape)
     if args.limit:
         names = {split: n[:args.limit] for split, n in names.items()}
     for split in ("train", "val", "test"):
