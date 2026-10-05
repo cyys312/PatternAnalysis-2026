@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+
+# Data, caches and model weights must never be committed
+*.nii
+*.nii.gz
+*.pt
+*.pth
+cache/
+checkpoints/
+runs/
+
+# Rangpur / Slurm logs
+slurm-*.out
+logs/
