@@ -1,16 +1,19 @@
 """
 Data loading and pre-processing for the HipMRI Study 3D prostate dataset.
 
-The dataset contains 211 pelvic MR volumes from 38 patients, each scanned in
-several treatment weeks. Every volume has a semantic label map with six
-classes (background, body, bone, bladder, rectum, prostate).
+The dataset contains 211 pelvic MR volumes from 38 patients. Most patients
+were scanned in eight treatment weeks, but eleven have a single scan. Files
+are named ``<patient>_Week<n>_LFOV.nii.gz`` (e.g. ``B006_Week0_LFOV.nii.gz``)
+and every volume has a semantic label map with six classes (background,
+body, bone, bladder, rectum, prostate).
 
 Pipeline:
-    1. Pair every MR volume with its label map by (case, week).
-    2. Split by *patient* (case ID) so that no patient appears in more than
-       one of train / validation / test. Scans of the same patient from
-       different weeks are almost identical, so a volume-level split would
-       leak test anatomy into training.
+    1. Pair every MR volume with its label map by (patient, week).
+    2. Split by *patient* so that no patient appears in more than one of
+       train / validation / test. Scans of the same patient from different
+       weeks are almost identical, so a volume-level split would leak test
+       anatomy into training. Single-scan and multi-scan patients are split
+       separately, so each subset gets a fair share of scans.
     3. Normalise each volume (z-score) and downsample it to a fixed grid.
        Labels are downsampled by averaging their one-hot encoding and taking
        the arg-max, which keeps thin structures better than nearest-neighbour.
@@ -47,7 +50,7 @@ TARGET_SHAPE = (64, 128, 128)
 
 SPLIT_FILE = Path(__file__).with_name("splits.json")
 
-_KEY_PATTERN = re.compile(r"Case_(\d+)_Week(\d+)", re.IGNORECASE)
+_KEY_PATTERN = re.compile(r"^([A-Z]\d+)_Week(\d+)_")
 
 
 # ---------------------------------------------------------------------------
@@ -55,16 +58,21 @@ _KEY_PATTERN = re.compile(r"Case_(\d+)_Week(\d+)", re.IGNORECASE)
 # ---------------------------------------------------------------------------
 
 def scan_key(path):
-    """Return the (case, week) key encoded in a HipMRI file name."""
-    match = _KEY_PATTERN.search(Path(path).name)
+    """Return the (patient, week) key encoded in a HipMRI file name."""
+    match = _KEY_PATTERN.match(Path(path).name)
     if match is None:
         raise ValueError(f"Unrecognised HipMRI file name: {path}")
-    return int(match.group(1)), int(match.group(2))
+    return match.group(1), int(match.group(2))
 
 
 def key_to_name(key):
     case, week = key
-    return f"Case_{case:03d}_Week{week}"
+    return f"{case}_Week{week}"
+
+
+def name_to_patient(name):
+    """Patient ID of a scan name such as ``B006_Week3``."""
+    return name.rsplit("_Week", 1)[0]
 
 
 def find_pairs(root):
@@ -91,23 +99,31 @@ def find_pairs(root):
     ]
 
 
-def patient_split(cases, fractions=(0.7, 0.15, 0.15), seed=3710):
+def patient_split(scans_per_patient, fractions=(0.7, 0.15, 0.15), seed=3710):
     """
     Randomly assign whole patients to train / val / test.
 
-    ``cases`` is an iterable of patient IDs. Returns a dict mapping split name
-    to a sorted list of patient IDs.
+    ``scans_per_patient`` maps patient ID to its number of scans. Patients
+    with one scan and with several scans are shuffled and split separately
+    (stratified), otherwise a test set drawn mostly from single-scan patients
+    could end up with very few scans. Returns a dict mapping split name to a
+    sorted list of patient IDs.
     """
-    cases = sorted(set(cases))
-    random.Random(seed).shuffle(cases)
-    n_test = round(fractions[2] * len(cases))
-    n_val = round(fractions[1] * len(cases))
-    split = {
-        "test": sorted(cases[:n_test]),
-        "val": sorted(cases[n_test:n_test + n_val]),
-        "train": sorted(cases[n_test + n_val:]),
-    }
-    return split
+    rng = random.Random(seed)
+    strata = defaultdict(list)
+    for case, count in sorted(scans_per_patient.items()):
+        strata[count > 1].append(case)
+
+    split = {"test": [], "val": [], "train": []}
+    for multi in sorted(strata):
+        cases = strata[multi]
+        rng.shuffle(cases)
+        n_test = round(fractions[2] * len(cases))
+        n_val = round(fractions[1] * len(cases))
+        split["test"] += cases[:n_test]
+        split["val"] += cases[n_test:n_test + n_val]
+        split["train"] += cases[n_test + n_val:]
+    return {name: sorted(cases) for name, cases in split.items()}
 
 
 def load_or_create_split(pairs, split_file=SPLIT_FILE):
@@ -121,7 +137,7 @@ def load_or_create_split(pairs, split_file=SPLIT_FILE):
     if split_file.exists():
         split = json.loads(split_file.read_text())
     else:
-        split = patient_split(p["case"] for p in pairs)
+        split = patient_split(Counter(p["case"] for p in pairs))
         split_file.write_text(json.dumps(split, indent=2) + "\n")
         print(f"Created new patient split at {split_file}")
 

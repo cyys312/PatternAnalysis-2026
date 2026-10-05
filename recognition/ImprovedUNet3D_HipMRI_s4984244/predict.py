@@ -32,7 +32,7 @@ from matplotlib.colors import ListedColormap
 from scipy import ndimage, stats
 
 from dataset import (CLASS_NAMES, DEFAULT_ROOT, NUM_CLASSES, find_pairs,
-                     key_to_name, load_split_scans)
+                     key_to_name, load_split_scans, name_to_patient)
 from modules import count_parameters
 from utils import dice_iou, load_checkpoint, predict_volume
 
@@ -340,8 +340,9 @@ def paired_test(results):
     out = {"mean_difference": float(diff.mean()),
            "per_scan_p": float(stats.wilcoxon(diff).pvalue)}
     # Scans of one patient are correlated, so also test patient means.
-    patients = sorted({n[:8] for n in names})
-    per_patient = np.array([diff[[n.startswith(p) for n in names]].mean() for p in patients])
+    owner = np.array([name_to_patient(n) for n in names])
+    patients = sorted(set(owner))
+    per_patient = np.array([diff[owner == p].mean() for p in patients])
     if len(per_patient) >= 5:
         out["per_patient_p"] = float(stats.wilcoxon(per_patient).pvalue)
     print(f"\nProstate Dice {a} - {b}: mean {out['mean_difference']:+.3f}, "
