@@ -264,12 +264,23 @@ def plot_examples(images, gts, preds, names, path, view="axial"):
 
 
 def plot_failures(images, gts, preds, results, path, count):
-    """Worst test scans of the main model: cropped slice with the lowest prostate Dice."""
+    """
+    Worst test scans of the main model (at most one per patient, since the
+    weekly scans of a patient fail alike), each cropped to its slice with the
+    lowest prostate Dice. Columns: MR, ground truth, then for every model its
+    predicted labels and its prostate errors.
+    """
     main = next(iter(results))
-    scans = sorted(results[main]["scans"], key=lambda s: s["dice"][PROSTATE])[:count]
+    scans, seen = [], set()
+    for s in sorted(results[main]["scans"], key=lambda s: s["dice"][PROSTATE]):
+        if name_to_patient(s["name"]) not in seen:
+            seen.add(name_to_patient(s["name"]))
+            scans.append(s)
+    scans = scans[:count]
     labels = list(preds)
-    fig, axes = plt.subplots(len(scans), 2 + len(labels),
-                             figsize=(2.8 * (2 + len(labels)), 2.8 * len(scans)), squeeze=False)
+    columns = 2 + 2 * len(labels)
+    fig, axes = plt.subplots(len(scans), columns,
+                             figsize=(2.6 * columns, 2.8 * len(scans)), squeeze=False)
     for row, s in zip(axes, scans):
         name, gt = s["name"], gts[s["name"]]
         inside = [r for r in s["profile"] if 0 <= r["t"] <= 1 and not np.isnan(r["dice"])]
@@ -280,13 +291,15 @@ def plot_failures(images, gts, preds, results, path, count):
         show(row[0], crop(images[name]),
              title=f"{name} z={z} (t={worst['t']:.2f})")
         show(row[1], crop(images[name]), crop(gt), "ground truth")
-        for ax, label in zip(row[2:], labels):
+        for i, label in enumerate(labels):
             pred = preds[label][name]
+            scan = next(x for x in results[label]["scans"] if x["name"] == name)
+            slice_dice = next(r["dice"] for r in scan["profile"] if r["z"] == z)
+            show(row[2 + 2 * i], crop(images[name]), crop(pred), f"{label}\nprediction")
+            ax = row[3 + 2 * i]
             show(ax, crop(images[name]))
             ax.imshow(error_map(crop(pred), crop(gt)), origin="lower", interpolation="nearest")
-            scan = next(x for x in results[label]["scans"] if x["name"] == name)
-            ax.set_title(f"{label}\nslice Dice "
-                         f"{next(r['dice'] for r in scan['profile'] if r['z'] == z):.2f}, "
+            ax.set_title(f"prostate errors\nslice Dice {slice_dice:.2f}, "
                          f"3D Dice {scan['dice'][PROSTATE]:.2f}", fontsize=8)
     fig.suptitle("Prostate errors: red = false positive, blue = false negative", fontsize=10)
     fig.tight_layout()
