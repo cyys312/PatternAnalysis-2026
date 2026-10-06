@@ -382,9 +382,12 @@ if __name__ == "__main__":
                         help="instead of auditing, create splits.json and the "
                              "pre-processed cache in CACHE_DIR (run on a CPU node "
                              "so GPU jobs start training straight away)")
+    parser.add_argument("--shape", default="x".join(map(str, TARGET_SHAPE)),
+                        help="volume size D x H x W for --prepare")
     args = parser.parse_args()
     if args.prepare:
-        scans, names = load_split_scans(args.root, args.prepare)
+        shape = tuple(int(v) for v in args.shape.split("x"))
+        scans, names = load_split_scans(args.root, args.prepare, shape)
         print({split: len(n) for split, n in names.items()}, "scans cached")
     else:
         audit(args.root)

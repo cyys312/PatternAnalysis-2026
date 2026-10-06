@@ -9,6 +9,8 @@
 # Data audit, patient split (splits.json) and pre-processed cache, on a CPU
 # node so the GPU jobs can start training straight away:
 #     cd recognition/ImprovedUNet3D_HipMRI_s4984244 && sbatch slurm/prepare_data.sh
+# Extra arguments go to the cache step, e.g. `sbatch slurm/prepare_data.sh --shape 128x256x256`.
+# Build each cache here before training: concurrent jobs would write the same file.
 
 set -euo pipefail
 echo "job $SLURM_JOB_ID on $(hostname), $(date)"
@@ -22,5 +24,5 @@ print("python", sys.version.split()[0], "| torch", torch.__version__, "| nibabel
       "| matplotlib", matplotlib.__version__)
 EOF
 python dataset.py
-python dataset.py --prepare cache
+python dataset.py --prepare cache "$@"      # e.g. --shape 128x256x256
 echo "done $(date)"
