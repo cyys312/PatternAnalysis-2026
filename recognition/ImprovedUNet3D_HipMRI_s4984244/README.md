@@ -35,8 +35,8 @@ project investigates.
 
 ## Feasibility Review
 
-*One-page review for the midpoint check-off. Draft of 5 Oct 2026; items marked ⏳ are
-filled in from the first full training runs.*
+*One-page review for the midpoint check-off, updated 6 Oct 2026 with the first full training
+runs.*
 
 **1. User need, scope and acceptance criteria.** The user is a radiotherapy planner who
 wants draft contours of the prostate and nearby organs at risk (bladder, rectum) plus body
@@ -68,27 +68,32 @@ imbalance, and leakage-free evaluation.
 slice so the apex/base slices survive. Split stratified by scans per patient: 26/6/6 patients
 (143/34/34 scans).
 *Smoke tests:* the full pipeline (train → test → evaluation figures) runs end to end on
-synthetic NIfTI data; on real data, 3 epochs on an A100 already give test Dice body 0.97,
-bone 0.74, bladder 0.77, prostate 0.51, rectum 0.15.
-*Measured cost:* 3D at 128³, batch 2: **4.0 GB** peak VRAM, **14 s/epoch** on an A100
-(≈ 70 min for 300 epochs). On an RTX 4060, the 3D model needed 4.0 GB and 0.43 s per step, and
-the 2D model 0.9 GB and 0.07 s per step (batch 32) — 4.4× less memory.
-⏳ Full-run Dice of both models and 2D wall time.
+synthetic NIfTI data and on 3 epochs of real data.
+*First full runs (test set, one A100):* the 3D model reaches Dice body 0.99, bone 0.92,
+bladder 0.95, rectum 0.88, prostate 0.87, so **A1 is met**; the 2D baseline gets 0.99, 0.92,
+0.94, 0.85, 0.87. Cost: 3D 1.1 h training (300 epochs) and 4.0 GB peak VRAM vs 2D 0.23 h and
+0.9 GB, i.e. ≈ 5× the compute; inference takes 0.025 s vs 0.022 s per volume (A4 met).
+*Early answer to the dilemma:* both models fall from 0.91 Dice in the mid-gland to 0.76–0.78
+at the apex and base, and 3D context does not change that (apex −0.02, base +0.02, HD95
+−0.1 mm; none significant), so **A2 is not met**. Its one consistent gain is the rectum
+(+0.03 Dice, better in all 6 test patients, p = 0.03).
 
 **4. Risks, budget and fallback.**
 
-- *Tiny structures* (rectum, prostate) may miss 0.70 at half in-plane resolution → train at
-  the native 128×256×256 (≈ 16 GB, fits an A100) and/or weight the cross-entropy.
+- *Apex and base stay weak for both models* — the limit may be the 3.4 mm in-plane voxels or
+  ambiguous ground truth rather than missing context → next experiment below.
 - *Few patients* (26 for training; weekly scans are near-duplicates) → augmentation,
   dropout, model selection on validation patients only.
 - *Low statistical power* (6 test patients) → report effect sizes and per-scan tests as well.
 - *Shared-cluster queues* → short time limits, cache built on a CPU node, 20-min `a100-test`
   partition for smoke tests.
 
-*Budget:* ≈ 1.2 A100-hours per 3D run; at most ~10 runs (≈ 15 GPU-hours) including tuning.
-*Next experiment:* full 300-epoch 3D and 50-epoch 2D runs (queued), then the zone-wise
-evaluation in `predict.py`. *Fallback:* if the 3D model still misses A1 by 22 Oct, switch to a
-2D Improved U-Net (Normal) on the same pipeline; the 2D-vs-3D question can still be answered.
+*Budget:* 1.1 A100-hours per 3D run at 128³ (best epoch ≈ 100 of 300, so runs can be
+shortened); at most ≈ 15 GPU-hours in total. *Next experiment:* train both models at the
+native 128 × 256 × 256 resolution (an estimated 16 GB for 3D) to test whether resolution, not context,
+limits the apex and base; then autopsy the worst apex/base cases. *Fallback:* A1 is already
+met at 128³, so the current models are the fallback if the high-resolution runs do not fit
+the budget or the queue.
 
 ## Dataset and Pre-processing
 
