@@ -13,6 +13,7 @@
 set -euo pipefail
 echo "job $SLURM_JOB_ID on $(hostname), $(date)"
 cd "$SLURM_SUBMIT_DIR"
+export PYTHONUNBUFFERED=1   # stream prints to the log as they happen
 
 python - <<'EOF'
 import sys, matplotlib, nibabel, numpy, scipy, torch

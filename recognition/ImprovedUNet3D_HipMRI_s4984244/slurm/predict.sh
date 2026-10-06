@@ -15,5 +15,6 @@ set -euo pipefail
 echo "job $SLURM_JOB_ID on $(hostname), $(date)"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 cd "$SLURM_SUBMIT_DIR"
+export PYTHONUNBUFFERED=1   # stream prints to the log as they happen
 python predict.py "$@"
 echo "done $(date)"
