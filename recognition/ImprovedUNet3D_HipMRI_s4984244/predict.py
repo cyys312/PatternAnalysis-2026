@@ -11,7 +11,8 @@ For every checkpoint this reports
     * prostate over-contoured into the rectum / bladder and missed prostate,
     * the number of connected components of the predicted prostate,
     * parameter count, inference latency and peak inference VRAM.
-With two checkpoints it also runs a paired Wilcoxon test on prostate Dice.
+With two checkpoints it also runs paired Wilcoxon tests (per scan and per
+patient) on the prostate zone, boundary and rectum metrics.
 
 NumPy / SciPy are used here only for evaluation and plotting.
 """
@@ -164,11 +165,17 @@ def profile_inference(model, model_name, image, device, repeats=10):
 # Figures
 # ---------------------------------------------------------------------------
 
-def show(ax, image, label=None, title=None):
-    ax.imshow(image, cmap="gray", origin="lower")
+def show(ax, image, label=None, title=None, origin="upper"):
+    """
+    Draw a slice with an optional label overlay. The volumes are LPS, so
+    origin="upper" shows axial slices in the radiological convention
+    (anterior up, patient's right on the left); sagittal slices (z, y) need
+    origin="lower" to put superior up.
+    """
+    ax.imshow(image, cmap="gray", origin=origin)
     if label is not None:
         ax.imshow(label, cmap=LABEL_CMAP, vmin=0, vmax=NUM_CLASSES - 1,
-                  origin="lower", interpolation="nearest")
+                  origin=origin, interpolation="nearest")
     ax.set_axis_off()
     if title:
         ax.set_title(title, fontsize=9)
@@ -254,10 +261,11 @@ def plot_examples(images, gts, preds, names, path, view="axial"):
         gt = gts[name]
         zc, yc, xc = (int(v) for v in ndimage.center_of_mass(gt == PROSTATE))
         take = (lambda v: v[zc]) if view == "axial" else (lambda v: v[:, :, xc])
-        show(row[0], take(images[name]), title=f"{name}")
-        show(row[1], take(images[name]), take(gt), "ground truth")
+        origin = "upper" if view == "axial" else "lower"
+        show(row[0], take(images[name]), title=f"{name}", origin=origin)
+        show(row[1], take(images[name]), take(gt), "ground truth", origin)
         for ax, label in zip(row[2:], labels):
-            show(ax, take(images[name]), take(preds[label][name]), label)
+            show(ax, take(images[name]), take(preds[label][name]), label, origin)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
@@ -298,7 +306,7 @@ def plot_failures(images, gts, preds, results, path, count):
             show(row[2 + 2 * i], crop(images[name]), crop(pred), f"{label}\nprediction")
             ax = row[3 + 2 * i]
             show(ax, crop(images[name]))
-            ax.imshow(error_map(crop(pred), crop(gt)), origin="lower", interpolation="nearest")
+            ax.imshow(error_map(crop(pred), crop(gt)), origin="upper", interpolation="nearest")
             ax.set_title(f"prostate errors\nslice Dice {slice_dice:.2f}, "
                          f"3D Dice {scan['dice'][PROSTATE]:.2f}", fontsize=8)
     fig.suptitle("Prostate errors: red = false positive, blue = false negative", fontsize=10)
@@ -343,25 +351,54 @@ def summarise(results):
               f"| {fmt(r.get('peak_train_vram_gb'), '.2f')} | {fmt(r.get('train_hours'), '.2f')} |")
 
 
+PAIRED_METRICS = {  # metric -> value for one scan; compared between the first two models
+    "prostate Dice": lambda s: s["dice"][PROSTATE],
+    "prostate apex Dice": lambda s: s["zone_dice"]["apex"],
+    "prostate base Dice": lambda s: s["zone_dice"]["base"],
+    "prostate HD95 (mm)": lambda s: s["hd95"][PROSTATE - 1],
+    "prostate spill slices": lambda s: s["spill_slices"],
+    "rectum Dice": lambda s: s["dice"][RECTUM],
+}
+
+
+def wilcoxon_p(diff):
+    """Two-sided Wilcoxon signed-rank p-value; 1.0 if every difference is zero."""
+    diff = diff[~np.isnan(diff)]
+    return float(stats.wilcoxon(diff).pvalue) if np.any(diff != 0) else 1.0
+
+
 def paired_test(results):
-    """Wilcoxon signed-rank test on prostate Dice, per scan and per patient."""
+    """
+    Paired comparison of the first two models on every metric in
+    PAIRED_METRICS: mean of each model, mean difference (first - second) and
+    Wilcoxon signed-rank p-values per scan and per patient. Scans of one
+    patient are correlated, so the per-patient test (on patient means) is the
+    honest one; with 6 test patients its smallest possible p is 0.03.
+    """
     (a, ra), (b, rb) = list(results.items())[:2]
-    da = {s["name"]: s["dice"][PROSTATE] for s in ra["scans"]}
-    db = {s["name"]: s["dice"][PROSTATE] for s in rb["scans"]}
-    names = sorted(da)
-    diff = np.array([da[n] - db[n] for n in names])
-    out = {"mean_difference": float(diff.mean()),
-           "per_scan_p": float(stats.wilcoxon(diff).pvalue)}
-    # Scans of one patient are correlated, so also test patient means.
+    sa = {s["name"]: s for s in ra["scans"]}
+    sb = {s["name"]: s for s in rb["scans"]}
+    names = sorted(sa)
     owner = np.array([name_to_patient(n) for n in names])
     patients = sorted(set(owner))
-    per_patient = np.array([diff[owner == p].mean() for p in patients])
-    if len(per_patient) >= 5:
-        out["per_patient_p"] = float(stats.wilcoxon(per_patient).pvalue)
-    print(f"\nProstate Dice {a} - {b}: mean {out['mean_difference']:+.3f}, "
-          f"Wilcoxon p = {out['per_scan_p']:.4f} over {len(names)} scans"
-          + (f", p = {out['per_patient_p']:.4f} over {len(patients)} patients"
-             if "per_patient_p" in out else ""))
+
+    print(f"\nPaired comparison, {a} vs {b} ({len(names)} scans, {len(patients)} patients):")
+    print("| Metric | " + a + " | " + b + " | difference | p (scans) | p (patients) |")
+    print("|---" * 6 + "|")
+    out = {}
+    for metric, value in PAIRED_METRICS.items():
+        va = np.array([value(sa[n]) for n in names], dtype=float)
+        vb = np.array([value(sb[n]) for n in names], dtype=float)
+        diff = va - vb
+        patient_diff = np.array([np.nanmean(diff[owner == p]) for p in patients])
+        row = {"mean_a": float(np.nanmean(va)), "mean_b": float(np.nanmean(vb)),
+               "mean_difference": float(np.nanmean(diff)),
+               "per_scan_p": wilcoxon_p(diff),
+               "per_patient_p": wilcoxon_p(patient_diff) if len(patients) >= 5 else None}
+        out[metric] = row
+        p_patient = f"{row['per_patient_p']:.3f}" if row["per_patient_p"] is not None else "n/a"
+        print(f"| {metric} | {row['mean_a']:.3f} | {row['mean_b']:.3f} | "
+              f"{row['mean_difference']:+.3f} | {row['per_scan_p']:.3f} | {p_patient} |")
     return out
 
 
@@ -418,7 +455,11 @@ def main():
     model_results = {k: v for k, v in results.items() if k != "paired_test"}
     plot_dice_bars(model_results, out_dir / "dice_comparison.png")
     plot_profiles(model_results, out_dir / "prostate_profile.png")
-    examples = test_names[:3]
+    # Example figures show the first scan of three different patients.
+    firsts = {}
+    for n in test_names:
+        firsts.setdefault(name_to_patient(n), n)
+    examples = list(firsts.values())[:3]
     plot_examples(images, gts, preds, examples, out_dir / "examples_axial.png", "axial")
     plot_examples(images, gts, preds, examples, out_dir / "examples_sagittal.png", "sagittal")
     plot_failures(images, gts, preds, model_results, out_dir / "failures.png", args.failures)
