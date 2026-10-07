@@ -425,6 +425,8 @@ PAIRED_METRICS = {  # metric -> value for one scan; compared between the first t
     "prostate base Dice": lambda s: s["zone_dice"]["base"],
     "prostate HD95 (mm)": lambda s: s["hd95"][PROSTATE - 1],
     "prostate spill slices": lambda s: s["spill_slices"],
+    "prostate over-contoured (mL)": lambda s: s["extra_prostate_ml"],
+    "prostate missed (mL)": lambda s: s["missed_prostate_ml"],
     "rectum Dice": lambda s: s["dice"][RECTUM],
     "rectum HD95 (mm)": lambda s: s["hd95"][RECTUM - 1],
     "bladder HD95 (mm)": lambda s: s["hd95"][BLADDER - 1],
