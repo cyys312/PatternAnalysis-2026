@@ -54,7 +54,8 @@ def parse_args():
     parser.add_argument("--cache", default="cache")
     parser.add_argument("--out", default="images", help="directory for figures")
     parser.add_argument("--limit", type=int, help="evaluate only this many test scans")
-    parser.add_argument("--failures", type=int, default=4, help="cases in the failure gallery")
+    parser.add_argument("--failures", type=int, default=4,
+                        help="number of lowest-Dice scans to list")
     return parser.parse_args()
 
 
@@ -136,6 +137,7 @@ def scan_metrics(pred, gt, spacing):
         "over_rectum_ml": float((p & (gt == RECTUM)).sum() * ml),
         "over_bladder_ml": float((p & (gt == BLADDER)).sum() * ml),
         "missed_prostate_ml": float((g & ~p).sum() * ml),
+        "extra_prostate_ml": float((p & ~g).sum() * ml),
         "components": int(ndimage.label(p)[1]),
         "profile": profile,
     }
@@ -190,10 +192,17 @@ def error_map(pred, gt):
     return rgba
 
 
-def prostate_box(gt, pad=12):
-    """Crop window (y0, y1, x0, x1) around the prostate across all slices."""
-    ys, xs = np.where((gt == PROSTATE).any(axis=0))
+def prostate_box(masks, pad=12):
+    """Crop window (y0, y1, x0, x1) around the union of prostate masks (any shape ending in H, W)."""
+    ys, xs = np.where(np.any([m.reshape(-1, *m.shape[-2:]).any(axis=0) for m in masks], axis=0))
     return (max(ys.min() - pad, 0), ys.max() + pad, max(xs.min() - pad, 0), xs.max() + pad)
+
+
+def slice_dice(pred, gt, z):
+    """Prostate Dice on axial slice z (NaN if neither has prostate there)."""
+    p, g = pred[z] == PROSTATE, gt[z] == PROSTATE
+    total = p.sum() + g.sum()
+    return 2 * (p & g).sum() / total if total else float("nan")
 
 
 def plot_dice_bars(results, path):
@@ -272,43 +281,100 @@ def plot_examples(images, gts, preds, names, path, view="axial"):
     plt.close(fig)
 
 
-def plot_failures(images, gts, preds, results, path, count):
+def select_failures(results, preds, gts):
     """
-    Worst test scans of the main model (at most one per patient, since the
-    weekly scans of a patient fail alike), each cropped to its slice with the
-    lowest prostate Dice. Columns: MR, ground truth, then for every model its
+    Pick one test case for each failure type the brief asks about, taking a
+    new patient for each type where possible (a patient's weekly scans fail
+    alike). Types, judged on the main (first) model unless stated:
+
+    * apex / base   - lowest zone Dice; shown at the worst slice of that zone
+    * spill         - most slices with prostate beyond the true apex/base
+    * over-contour  - largest prostate volume drawn outside the true gland
+    * fragments     - most disconnected prostate pieces in any model; shown
+                      at the slice through the smallest piece
+
+    Returns a list of dicts with keys kind, name, z and why.
+    """
+    labels = list(results)
+    main = labels[0]
+    scans = results[main]["scans"]
+    used, cases = set(), []
+
+    def take(kind, scored):
+        """scored: (score, name, z, why); keep the highest score from an unused patient."""
+        scored = sorted((c for c in scored if c[2] is not None), key=lambda c: -c[0])
+        if not scored:
+            return
+        fresh = [c for c in scored if name_to_patient(c[1]) not in used]
+        _, name, z, why = (fresh or scored)[0]
+        used.add(name_to_patient(name))
+        cases.append({"kind": kind, "name": name, "z": int(z), "why": why})
+
+    def worst_in(scan, lo, hi):
+        rows = [r for r in scan["profile"] if lo <= r["t"] <= hi and not np.isnan(r["dice"])]
+        return min(rows, key=lambda r: r["dice"])["z"] if rows else None
+
+    for kind, lo, hi in (("apex", 0, 1 / 3), ("base", 2 / 3, 1)):
+        take(kind, [(-s["zone_dice"][kind], s["name"], worst_in(s, lo, hi),
+                     f"{main} {kind} Dice {s['zone_dice'][kind]:.2f}")
+                    for s in scans if not np.isnan(s["zone_dice"][kind])])
+
+    spill = []
+    for s in scans:
+        outside = [r for r in s["profile"] if not 0 <= r["t"] <= 1 and r["pred_voxels"] > 0]
+        if outside:
+            z = max(outside, key=lambda r: r["pred_voxels"])["z"]
+            spill.append((s["spill_slices"], s["name"], z,
+                          f"{main} prostate on {s['spill_slices']} slices beyond the gland"))
+    take("spill", spill)
+
+    over = []
+    for s in scans:
+        extra = (preds[main][s["name"]] == PROSTATE) & (gts[s["name"]] != PROSTATE)
+        if extra.any():
+            z = int(extra.sum(axis=(1, 2)).argmax())
+            over.append((s["extra_prostate_ml"], s["name"], z,
+                         f"{main} draws {s['extra_prostate_ml']:.1f} mL outside the gland"))
+    take("over-contour", over)
+
+    fragments = []
+    for label in labels:
+        for s in results[label]["scans"]:
+            if s["components"] > 1:
+                pieces, n = ndimage.label(preds[label][s["name"]] == PROSTATE)
+                smallest = 1 + int(np.bincount(pieces.ravel())[1:].argmin())
+                z = int(ndimage.center_of_mass(pieces == smallest)[0])
+                fragments.append((s["components"], s["name"], z,
+                                  f"{label} predicts {s['components']} separate prostate pieces"))
+    take("fragments", fragments)
+    return cases
+
+
+def plot_failures(images, gts, preds, results, cases, path):
+    """
+    One row per selected failure case, cropped around the prostate on the
+    chosen axial slice. Columns: MR, ground truth, then for every model its
     predicted labels and its prostate errors.
     """
-    main = next(iter(results))
-    scans, seen = [], set()
-    for s in sorted(results[main]["scans"], key=lambda s: s["dice"][PROSTATE]):
-        if name_to_patient(s["name"]) not in seen:
-            seen.add(name_to_patient(s["name"]))
-            scans.append(s)
-    scans = scans[:count]
     labels = list(preds)
     columns = 2 + 2 * len(labels)
-    fig, axes = plt.subplots(len(scans), columns,
-                             figsize=(2.6 * columns, 2.8 * len(scans)), squeeze=False)
-    for row, s in zip(axes, scans):
-        name, gt = s["name"], gts[s["name"]]
-        inside = [r for r in s["profile"] if 0 <= r["t"] <= 1 and not np.isnan(r["dice"])]
-        worst = min(inside, key=lambda r: r["dice"]) if inside else s["profile"][0]
-        z = worst["z"]
-        y0, y1, x0, x1 = prostate_box(gt)
+    fig, axes = plt.subplots(len(cases), columns,
+                             figsize=(2.6 * columns, 2.9 * len(cases)), squeeze=False)
+    for row, case in zip(axes, cases):
+        name, z, gt = case["name"], case["z"], gts[case["name"]]
+        y0, y1, x0, x1 = prostate_box([gt == PROSTATE]
+                                      + [preds[label][name][z] == PROSTATE for label in labels])
         crop = (lambda v: v[z, y0:y1, x0:x1])
-        show(row[0], crop(images[name]),
-             title=f"{name} z={z} (t={worst['t']:.2f})")
+        show(row[0], crop(images[name]), title=f"{case['kind']}: {name}, z={z}")
         show(row[1], crop(images[name]), crop(gt), "ground truth")
         for i, label in enumerate(labels):
             pred = preds[label][name]
             scan = next(x for x in results[label]["scans"] if x["name"] == name)
-            slice_dice = next(r["dice"] for r in scan["profile"] if r["z"] == z)
             show(row[2 + 2 * i], crop(images[name]), crop(pred), f"{label}\nprediction")
             ax = row[3 + 2 * i]
             show(ax, crop(images[name]))
             ax.imshow(error_map(crop(pred), crop(gt)), origin="upper", interpolation="nearest")
-            ax.set_title(f"prostate errors\nslice Dice {slice_dice:.2f}, "
+            ax.set_title(f"prostate errors\nslice Dice {slice_dice(pred, gt, z):.2f}, "
                          f"3D Dice {scan['dice'][PROSTATE]:.2f}", fontsize=8)
     fig.suptitle("Prostate errors: red = false positive, blue = false negative", fontsize=10)
     fig.tight_layout()
@@ -330,8 +396,8 @@ def summarise(results):
         print(f"| {label} | " + " | ".join(cells) + f" | {np.nanmean(d):.3f} |")
 
     print("\n| Model | prostate HD95 (mm) | apex Dice | mid Dice | base Dice | spill slices "
-          "| into rectum (mL) | into bladder (mL) | missed (mL) | components |")
-    print("|---" * 10 + "|")
+          "| into rectum (mL) | into bladder (mL) | missed (mL) | extra (mL) | components |")
+    print("|---" * 11 + "|")
     for label, res in results.items():
         s = res["scans"]
         col = lambda f: np.nanmean([f(x) for x in s])
@@ -339,7 +405,8 @@ def summarise(results):
               + " ".join(f"| {col(lambda x, z=z: x['zone_dice'][z]):.3f}" for z, _, _ in ZONES)
               + f" | {col(lambda x: x['spill_slices']):.2f} "
               f"| {col(lambda x: x['over_rectum_ml']):.2f} | {col(lambda x: x['over_bladder_ml']):.2f} "
-              f"| {col(lambda x: x['missed_prostate_ml']):.2f} | {col(lambda x: x['components']):.2f} |")
+              f"| {col(lambda x: x['missed_prostate_ml']):.2f} | {col(lambda x: x['extra_prostate_ml']):.2f} "
+              f"| {col(lambda x: x['components']):.2f} |")
 
     print("\n| Model | parameters | inference latency (s/volume) | peak inference VRAM (GB) "
           "| peak training VRAM (GB) | training time (h) |")
@@ -452,10 +519,10 @@ def main():
         results[label] = {"checkpoint": str(path), "resources": resources, "scans": per_scan}
 
     summarise(results)
-    if len(results) >= 2:
-        results["paired_test"] = paired_test(results)
+    model_results = dict(results)  # models only; summary entries are added to results below
+    if len(model_results) >= 2:
+        results["paired_test"] = paired_test(model_results)
 
-    model_results = {k: v for k, v in results.items() if k != "paired_test"}
     plot_dice_bars(model_results, out_dir / "dice_comparison.png")
     plot_profiles(model_results, out_dir / "prostate_profile.png")
     # Example figures show the first scan of three different patients.
@@ -465,7 +532,12 @@ def main():
     examples = list(firsts.values())[:3]
     plot_examples(images, gts, preds, examples, out_dir / "examples_axial.png", "axial")
     plot_examples(images, gts, preds, examples, out_dir / "examples_sagittal.png", "sagittal")
-    plot_failures(images, gts, preds, model_results, out_dir / "failures.png", args.failures)
+    cases = select_failures(model_results, preds, gts)
+    plot_failures(images, gts, preds, model_results, cases, out_dir / "failures.png")
+    results["failure_cases"] = cases
+    print("\nFailure gallery:")
+    for c in cases:
+        print(f"  {c['kind']:<12} {c['name']} z={c['z']}: {c['why']}")
 
     worst = sorted(next(iter(model_results.values()))["scans"], key=lambda s: s["dice"][PROSTATE])
     print("\nLowest prostate Dice (main model):")
