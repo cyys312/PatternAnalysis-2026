@@ -12,7 +12,8 @@ For every checkpoint this reports
     * the number of connected components of the predicted prostate,
     * parameter count, inference latency and peak inference VRAM.
 With two checkpoints it also runs paired Wilcoxon tests (per scan and per
-patient) on the prostate zone, boundary and rectum metrics.
+patient) on the prostate zone and boundary metrics and on the rectum
+and bladder.
 
 NumPy / SciPy are used here only for evaluation and plotting.
 """
@@ -358,6 +359,8 @@ PAIRED_METRICS = {  # metric -> value for one scan; compared between the first t
     "prostate HD95 (mm)": lambda s: s["hd95"][PROSTATE - 1],
     "prostate spill slices": lambda s: s["spill_slices"],
     "rectum Dice": lambda s: s["dice"][RECTUM],
+    "rectum HD95 (mm)": lambda s: s["hd95"][RECTUM - 1],
+    "bladder HD95 (mm)": lambda s: s["hd95"][BLADDER - 1],
 }
 
 
