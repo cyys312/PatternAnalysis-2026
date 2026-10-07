@@ -75,6 +75,11 @@ def surface_distances(pred, gt, spacing):
     """Symmetric boundary-to-boundary distances in mm, or None if a mask is empty."""
     if not pred.any() or not gt.any():
         return None
+    # Every border voxel lies inside the joint bounding box, so the distances are the
+    # same when computed there; a one-voxel margin keeps the erosion unchanged.
+    box = tuple(slice(max(idx.min() - 1, 0), idx.max() + 2)
+                for idx in np.nonzero(pred | gt))
+    pred, gt = pred[box], gt[box]
     pred_border = pred ^ ndimage.binary_erosion(pred)
     gt_border = gt ^ ndimage.binary_erosion(gt)
     to_gt = ndimage.distance_transform_edt(~gt_border, sampling=spacing)
