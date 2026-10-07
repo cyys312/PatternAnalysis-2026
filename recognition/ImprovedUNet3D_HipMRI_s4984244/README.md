@@ -327,6 +327,42 @@ weekly scans are correlated; with 6 patients its smallest possible p is 0.031).
 - **The rectum is the one effect that holds at the patient level:** +0.032 Dice, better in
   every one of the six test patients.
 
+### Failure autopsy
+
+One case per failure type for the 128³ models, chosen automatically by `predict.py` from a
+different test patient each (red = false positive, blue = false negative prostate):
+
+![Failure cases](images/failures.png)
+
+1. **Apex — M013 week 4, slice 49.** The true apex is a 3–4-voxel island in front of the
+   rectum; both models miss it completely (apex-third Dice 0.53 vs 0.52). At 3.4 mm in-plane
+   voxels the tapering apex is barely resolvable, and the neighbouring slices cannot help
+   because the gland is vanishing there too. *Trigger: resolution and partial-volume effect,
+   not missing context.*
+2. **Base — S035 week 0, slice 64.** This single-scan patient has the smallest gland in the
+   test set (17.5 mL). At the base the ground truth is a one-voxel strip under the bladder,
+   while both models paint a blob that the image does not separate from the bladder neck;
+   the 2D model also splits the gland in two (base-third Dice 3D 0.59, 2D 0.44). *Trigger:
+   the bladder-neck boundary is a judgement the annotator made but the intensities do not show.*
+3. **Spill into the bladder — R016 week 7, slice 56.** On a slice above the gland the 3D model
+   labels a large central region of the bladder as prostate (21.3 mL over-contoured in this scan, base-third
+   Dice 0.60), while the 2D model labels it correctly (0.79). The patient's other seven weeks
+   are unremarkable (1.8–6.6 mL over-contoured). In week 7 the bladder contents are darker and
+   heterogeneous, and the 3D model carries the gland up from the slices below. *Trigger:
+   3D context propagating an error — the clearest case where context made the base worse.*
+4. **Over-contouring — R024 week 0, slice 72.** In mid-gland both models draw almost the same
+   outline, larger than the ground truth and mostly towards the rectum (14.5 and 11.0 mL
+   over-contoured). The ground-truth gland in this week is 30.9 mL, 21 % below the median of
+   the patient's other seven weeks (39.1 mL), on which both models score 0.86–0.91. Either this
+   contour was drawn tighter or the gland swelled during treatment; either way no architecture
+   can learn it from the image. *Trigger: variation in the reference contour or the anatomy,
+   in the clinically worst direction (rectal wall).*
+5. **Fragments — C032 week 7, slice 88.** Above the base the 2D model places a two-voxel
+   prostate island on the floor of the bladder, detached from the gland; the 3D model does
+   not. This is the error that through-plane context reliably prevents. The same patient
+   shows a second, slower problem: the reference gland grows from 19.9 mL in week 0 to 28.2 mL
+   in week 7, and both models increasingly under-contour it (9.1 and 9.7 mL missed in week 7).
+
 ### Is resolution the bottleneck rather than context?
 
 If the ends of the gland fail because a 3.4 mm in-plane voxel is too coarse for a tapering
@@ -392,42 +428,6 @@ evaluated in the same way (`sbatch slurm/prepare_data.sh --shape 128x256x256`, t
 5. **Treat these results as indicative.** They rest on six test patients; only the rectum
    effect is significant at the patient level. A larger or cross-validated test would be
    needed before clinical use.
-
-### Failure autopsy
-
-One case per failure type, chosen automatically by `predict.py` from a different test patient
-each (red = false positive, blue = false negative prostate):
-
-![Failure cases](images/failures.png)
-
-1. **Apex — M013 week 4, slice 49.** The true apex is a 3–4-voxel island in front of the
-   rectum; both models miss it completely (apex-third Dice 0.53 vs 0.52). At 3.4 mm in-plane
-   voxels the tapering apex is barely resolvable, and the neighbouring slices cannot help
-   because the gland is vanishing there too. *Trigger: resolution and partial-volume effect,
-   not missing context.*
-2. **Base — S035 week 0, slice 64.** This single-scan patient has the smallest gland in the
-   test set (17.5 mL). At the base the ground truth is a one-voxel strip under the bladder,
-   while both models paint a blob that the image does not separate from the bladder neck;
-   the 2D model also splits the gland in two (base-third Dice 3D 0.59, 2D 0.44). *Trigger:
-   the bladder-neck boundary is a judgement the annotator made but the intensities do not show.*
-3. **Spill into the bladder — R016 week 7, slice 56.** On a slice above the gland the 3D model
-   labels a large central region of the bladder as prostate (21.3 mL over-contoured in this scan, base-third
-   Dice 0.60), while the 2D model labels it correctly (0.79). The patient's other seven weeks
-   are unremarkable (1.8–6.6 mL over-contoured). In week 7 the bladder contents are darker and
-   heterogeneous, and the 3D model carries the gland up from the slices below. *Trigger:
-   3D context propagating an error — the clearest case where context made the base worse.*
-4. **Over-contouring — R024 week 0, slice 72.** In mid-gland both models draw almost the same
-   outline, larger than the ground truth and mostly towards the rectum (14.5 and 11.0 mL
-   over-contoured). The ground-truth gland in this week is 30.9 mL, 21 % below the median of
-   the patient's other seven weeks (39.1 mL), on which both models score 0.86–0.91. Either this
-   contour was drawn tighter or the gland swelled during treatment; either way no architecture
-   can learn it from the image. *Trigger: variation in the reference contour or the anatomy,
-   in the clinically worst direction (rectal wall).*
-5. **Fragments — C032 week 7, slice 88.** Above the base the 2D model places a two-voxel
-   prostate island on the floor of the bladder, detached from the gland; the 3D model does
-   not. This is the error that through-plane context reliably prevents. The same patient
-   shows a second, slower problem: the reference gland grows from 19.9 mL in week 0 to 28.2 mL
-   in week 7, and both models increasingly under-contour it (9.1 and 9.7 mL missed in week 7).
 
 ## Artificial Intelligence Usage Disclosure
 
