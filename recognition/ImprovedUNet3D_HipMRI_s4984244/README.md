@@ -204,8 +204,9 @@ Training uses AdamW [5] with cosine learning-rate decay [6] and mixed precision.
 model segments each whole validation volume, and the checkpoint with the highest mean foreground
 Dice is kept as `best.pt`. `train.py` writes `best.pt`, `last.pt`, `history.json`, `curves.png`
 (loss and per-class validation Dice) and `test_metrics.json` to `runs/<model>/`. `predict.py`
-writes the figures and `results.json` to `images/`; with two checkpoints, the first is treated as
-the main model.
+writes the figures and a per-scan `results.json` to `images/` (the JSON is not committed:
+the repository holds only code and the README figures); with two checkpoints, the first is
+treated as the main model.
 
 **Reproducibility.** The split is fixed by `splits.json`, the seed by `--seed`, and the cache
 is rebuilt automatically if the shape or the number of scans changes. GPU convolutions and mixed
@@ -369,9 +370,8 @@ If the ends of the gland fail because a 3.4 mm in-plane voxel is too coarse for 
 structure, more context will not help but more resolution should. Both models were therefore
 retrained at the native 128 × 256 × 256 grid (1.68 mm in-plane) with identical settings and
 evaluated in the same way (`sbatch slurm/prepare_data.sh --shape 128x256x256`, then
-`train.sh ... --shape 128x256x256 --out runs_native`; per-scan results in
-[`images/native_results.json`](images/native_results.json), and for 128³ in
-[`images/results.json`](images/results.json)).
+`train.sh ... --shape 128x256x256 --out runs_native`, and `predict.sh ... --out
+images_native`).
 
 | Prostate (test set) | 3D 128³ | 3D native | 2D 128³ | 2D native |
 |---|---|---|---|---|

@@ -11,6 +11,10 @@ cache/
 checkpoints/
 runs/
 
+# Evaluation outputs: only the README figures are committed
+images/*.json
+images_native/
+
 # Rangpur / Slurm logs
 slurm-*.out
 logs/
