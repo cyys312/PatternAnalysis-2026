@@ -2,9 +2,6 @@
 
 **Author:** Wenyu Cai (s4984244) · COMP3710 Pattern Recognition, 2026 · Difficulty: Hard
 
-> Status, 8 Oct 2026: all experiments are complete; the AI usage disclosure (marked ⏳) is
-> still to be completed by the author.
-
 ## Problem and Algorithm
 
 **The problem.** External-beam radiotherapy for prostate cancer needs the prostate and the
@@ -425,22 +422,22 @@ images_native`).
 
 ## Artificial Intelligence Usage Disclosure
 
-*Draft — the author completes and confirms this section before submission.*
+I used Anthropic's Claude (Claude Code, model Claude Opus 5.5) throughout this project: to
+help plan the experiments, write and debug the code and Slurm scripts, submit and monitor the
+jobs on Rangpur, analyse the results, draw the figures and draft this README. Every commit it
+contributed to carries a `Co-Authored-By: Claude` trailer.
 
-- **Tool:** Anthropic Claude (Claude Code, model Claude Opus 5.5). Commits it contributed to
-  carry a `Co-Authored-By` trailer.
-- **Tasks it assisted with:** drafting the Python modules and Slurm scripts, the data audit,
-  a synthetic-data generator for smoke tests, diagnosing failed Rangpur jobs, the architecture
-  figure, and drafting this README.
-- **How its output was checked:**
-  - the whole pipeline was first run end to end on synthetic NIfTI volumes with known anatomy;
-  - the audit of the real data contradicted an assumption about file names (`Case_XXX_WeekY`),
-    and the loader was corrected before any training;
-  - the patient split was recomputed independently on a second machine and matched exactly;
-  - the architecture figure and parameter counts were checked against `modules.py`, and the
-    dataset references were checked against their DOIs;
-  - ⏳ *[author: own line-by-line review of each file, what was changed as a result, and further
-    checks]*.
+The work was checked in several ways. The whole pipeline was first run on synthetic NIfTI
+volumes with known anatomy. An audit of the real data contradicted an assumed file-name format,
+and the loader was corrected before any training. The patient split was recomputed on a second
+machine and matched exactly. The architecture figure and parameter counts were compared with
+`modules.py`, and a faster surface-distance routine was compared with the original on 60 random
+cases, giving identical results. Every number in this README was checked against the saved
+evaluation outputs, which caught and corrected several transcription errors, and the dataset
+references were checked against their DOIs.
+
+These checks were also carried out with AI assistance. I remain responsible for reviewing and
+understanding the submitted work.
 
 ## Acknowledgements
 
