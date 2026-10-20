@@ -11,9 +11,12 @@ For every checkpoint this reports
     * prostate over-contoured into the rectum / bladder and missed prostate,
     * the number of connected components of the predicted prostate,
     * parameter count, inference latency and peak inference VRAM.
-With two checkpoints it also runs paired Wilcoxon tests (per scan and per
-patient) on the prostate zone and boundary metrics and on the rectum
-and bladder.
+With several checkpoints it also compares the first with each of the others
+using paired Wilcoxon tests (per scan and per patient) on the prostate zone
+and boundary metrics and on the rectum and bladder.
+
+    --split val          evaluate the validation patients instead of the test patients
+    --postprocess lcc    keep only the largest connected piece of each organ
 
 NumPy / SciPy are used here only for evaluation and plotting.
 """
@@ -39,7 +42,9 @@ from modules import count_parameters
 from utils import dice_iou, load_checkpoint, predict_volume
 
 BLADDER, RECTUM, PROSTATE = 3, 4, 5
-DISPLAY_NAMES = {"unet3d": "3D Improved U-Net", "unet2d": "2D U-Net (baseline)"}
+DISPLAY_NAMES = {"unet3d": "3D Improved U-Net", "improved2d": "2D Improved U-Net",
+                 "unet2d": "2D U-Net (baseline)"}
+ORGANS = (BLADDER, RECTUM, PROSTATE)  # single connected structures
 LABEL_CMAP = ListedColormap([(0, 0, 0, 0), (0.95, 0.85, 0.6, 0.12), (1, 1, 1, 0.55),
                              (1, 0.85, 0, 0.6), (0.55, 0.3, 0.1, 0.7), (0.9, 0.1, 0.2, 0.75)])
 ZONES = (("apex", 0, 1 / 3), ("mid", 1 / 3, 2 / 3), ("base", 2 / 3, 1.0001))
@@ -53,7 +58,12 @@ def parse_args():
     parser.add_argument("--root", default=DEFAULT_ROOT)
     parser.add_argument("--cache", default="cache")
     parser.add_argument("--out", default="images", help="directory for figures")
-    parser.add_argument("--limit", type=int, help="evaluate only this many test scans")
+    parser.add_argument("--split", choices=("test", "val"), default="test",
+                        help="patients to evaluate (val for decisions, test for reporting)")
+    parser.add_argument("--postprocess", choices=("none", "lcc"), default="none",
+                        help="lcc: keep only the largest connected piece of bladder, "
+                             "rectum and prostate")
+    parser.add_argument("--limit", type=int, help="evaluate only this many scans")
     parser.add_argument("--failures", type=int, default=4,
                         help="number of lowest-Dice scans to list")
     return parser.parse_args()
@@ -167,6 +177,28 @@ def profile_inference(model, model_name, image, device, repeats=10):
     latency = (time.perf_counter() - tic) / repeats
     peak = torch.cuda.max_memory_allocated() / 1e9 if amp else None
     return latency, peak
+
+
+def keep_largest_components(probs):
+    """
+    Label map from class probabilities (C, D, H, W), keeping only the largest
+    connected piece of each organ in ORGANS. Voxels of smaller pieces go to
+    their next most likely class.
+    """
+    probs = probs.copy()
+    for _ in range(3):  # reassigned voxels can rarely form new pieces; repeat
+        pred = probs.argmax(axis=0)
+        changed = False
+        for c in ORGANS:
+            pieces, n = ndimage.label(pred == c)
+            if n > 1:
+                sizes = np.bincount(pieces.ravel())
+                sizes[0] = 0
+                probs[c][(pieces > 0) & (pieces != sizes.argmax())] = -1.0
+                changed = True
+        if not changed:
+            break
+    return probs.argmax(axis=0)
 
 
 # ---------------------------------------------------------------------------
@@ -444,23 +476,23 @@ def wilcoxon_p(diff):
     return float(stats.wilcoxon(diff).pvalue) if np.any(diff != 0) else 1.0
 
 
-def paired_test(results):
+def compare(name_a, scans_a, name_b, scans_b):
     """
-    Paired comparison of the first two models on every metric in
-    PAIRED_METRICS: mean of each model, mean difference (first - second) and
-    Wilcoxon signed-rank p-values per scan and per patient. Scans of one
-    patient are correlated, so the per-patient test (on patient means) is the
-    honest one; with 6 test patients its smallest possible p is 0.03.
+    Paired comparison of two models on every metric in PAIRED_METRICS: mean
+    of each, mean difference (a - b) and two-sided Wilcoxon signed-rank
+    p-values per scan and per patient. Scans of one patient are correlated, so
+    the per-patient test (on patient means) is the honest one; with 6 patients
+    its smallest possible p is 0.031. No correction for multiple comparisons
+    is applied, so treat single p-values near 0.05 as exploratory.
     """
-    (a, ra), (b, rb) = list(results.items())[:2]
-    sa = {s["name"]: s for s in ra["scans"]}
-    sb = {s["name"]: s for s in rb["scans"]}
+    sa = {s["name"]: s for s in scans_a}
+    sb = {s["name"]: s for s in scans_b}
     names = sorted(sa)
     owner = np.array([name_to_patient(n) for n in names])
     patients = sorted(set(owner))
 
-    print(f"\nPaired comparison, {a} vs {b} ({len(names)} scans, {len(patients)} patients):")
-    print("| Metric | " + a + " | " + b + " | difference | p (scans) | p (patients) |")
+    print(f"\nPaired comparison, {name_a} vs {name_b} ({len(names)} scans, {len(patients)} patients):")
+    print(f"| Metric | {name_a} | {name_b} | difference | p (scans) | p (patients) |")
     print("|---" * 6 + "|")
     out = {}
     for metric, value in PAIRED_METRICS.items():
@@ -479,6 +511,13 @@ def paired_test(results):
     return out
 
 
+def paired_test(results):
+    """Compare the main (first) model with each other model."""
+    (main, rm), *others = results.items()
+    return {f"{main} vs {other}": compare(main, rm["scans"], other, ro["scans"])
+            for other, ro in others}
+
+
 def main():
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -492,7 +531,7 @@ def main():
     shape = shapes.pop()
 
     scans, names = load_split_scans(args.root, args.cache, shape)
-    test_names = names["test"][:args.limit] if args.limit else names["test"]
+    test_names = names[args.split][:args.limit] if args.limit else names[args.split]
     paths = {key_to_name((p["case"], p["week"])): p["image"] for p in find_pairs(args.root)}
 
     images = {n: scans[n][0].float().numpy() for n in test_names}
@@ -504,13 +543,17 @@ def main():
         label = DISPLAY_NAMES.get(ckpt["model"], ckpt["model"])
         if label in results:
             label = f"{label} ({path})"
-        print(f"Evaluating {label} on {len(test_names)} test scans")
+        print(f"Evaluating {label} on {len(test_names)} {args.split} scans"
+              + (" with largest-component post-processing" if args.postprocess == "lcc" else ""))
         preds[label], per_scan = {}, []
         for n in test_names:
             image = scans[n][0].float()[None].to(device)
             with torch.autocast(device.type, dtype=torch.float16, enabled=device.type == "cuda"):
                 probs = predict_volume(model, image, ckpt["model"])
-            pred = probs.argmax(dim=0).cpu().numpy()
+            if args.postprocess == "lcc":
+                pred = keep_largest_components(probs.float().cpu().numpy())
+            else:
+                pred = probs.argmax(dim=0).cpu().numpy()
             preds[label][n] = pred
             per_scan.append({"name": n, **scan_metrics(pred, gts[n], spacing[n])})
 
@@ -523,7 +566,9 @@ def main():
             saved = json.loads(train_metrics.read_text())
             resources.update(train_hours=saved["train_hours"],
                              peak_train_vram_gb=saved["peak_train_vram_gb"])
-        results[label] = {"checkpoint": str(path), "resources": resources, "scans": per_scan}
+        results[label] = {"checkpoint": str(path), "split": args.split,
+                          "postprocess": args.postprocess, "resources": resources,
+                          "scans": per_scan}
 
     summarise(results)
     model_results = dict(results)  # models only; summary entries are added to results below
