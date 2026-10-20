@@ -432,7 +432,7 @@ def plot_failures(images, gts, preds, results, cases, path):
             ax.set_title(f"prostate errors\nslice Dice {slice_dice(pred, gt, z):.2f}, "
                          f"3D Dice {scan['dice'][PROSTATE]:.2f}", fontsize=8)
     fig.suptitle("Prostate errors: red = false positive, blue = false negative", fontsize=10)
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0, 1, 1 - 0.35 / fig.get_figheight()))  # leave room for the title
     fig.savefig(path, dpi=150)
     plt.close(fig)
 
