@@ -329,6 +329,9 @@ def select_failures(results, preds, gts):
     * over-contour  - largest prostate volume drawn outside the true gland
     * fragments     - most disconnected prostate pieces in any model; shown
                       at the slice through the smallest piece
+    * baseline fails - largest prostate Dice lead of the main model over the
+                      worst other model, i.e. where context helps most; shown
+                      at the slice where the two differ most
 
     Returns a list of dicts with keys kind, name, z and why.
     """
@@ -384,6 +387,21 @@ def select_failures(results, preds, gts):
                 fragments.append((s["components"], s["name"], z,
                                   f"{label} predicts {s['components']} separate prostate pieces"))
     take("fragments", fragments)
+
+    lead = []
+    for s in scans:
+        others = [next(x for x in results[l]["scans"] if x["name"] == s["name"]) for l in labels[1:]]
+        if not others:
+            break
+        worst = min(range(len(others)), key=lambda i: others[i]["dice"][PROSTATE])
+        gap = s["dice"][PROSTATE] - others[worst]["dice"][PROSTATE]
+        if gap > 0:
+            gt, a, b = gts[s["name"]], preds[main][s["name"]], preds[labels[1 + worst]][s["name"]]
+            zs = [r["z"] for r in s["profile"] if 0 <= r["t"] <= 1]
+            z = max(zs, key=lambda z: np.nan_to_num(slice_dice(a, gt, z) - slice_dice(b, gt, z)))
+            lead.append((gap, s["name"], z, f"{main} Dice {s['dice'][PROSTATE]:.2f} vs "
+                         f"{labels[1 + worst]} {others[worst]['dice'][PROSTATE]:.2f}"))
+    take("baseline fails", lead)
     return cases
 
 
