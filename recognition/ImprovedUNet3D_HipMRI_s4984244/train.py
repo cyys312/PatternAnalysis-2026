@@ -2,9 +2,10 @@
 Train, validate, test and save a segmentation model on the HipMRI 3D data.
 
     python train.py --model unet3d            # 3D Improved U-Net
-    python train.py --model unet2d            # 2D U-Net baseline
+    python train.py --model improved2d        # same network in 2D (context control)
+    python train.py --model unet2d            # standard 2D U-Net baseline
 
-Both models are validated and tested on whole volumes of the same patients,
+All models are validated and tested on whole volumes of the same patients,
 so their numbers are directly comparable. Outputs go to ``<out>/<model>/``:
 
     best.pt / last.pt     checkpoints (best = highest mean foreground val Dice)
@@ -34,6 +35,7 @@ from utils import build_model, dice_iou, predict_volume
 # Per-model defaults, overridable from the command line.
 DEFAULTS = {
     "unet3d": {"epochs": 300, "batch_size": 2, "lr": 5e-4},
+    "improved2d": {"epochs": 50, "batch_size": 32, "lr": 5e-4},
     "unet2d": {"epochs": 50, "batch_size": 32, "lr": 1e-3},
 }
 

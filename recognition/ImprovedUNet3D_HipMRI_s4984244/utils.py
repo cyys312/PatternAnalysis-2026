@@ -6,13 +6,13 @@ overlap metrics.
 
 import torch
 
-from modules import ImprovedUNet3D, UNet2D
+from modules import ImprovedUNet2D, ImprovedUNet3D, UNet2D
 
-MODELS = {"unet3d": ImprovedUNet3D, "unet2d": UNet2D}
+MODELS = {"unet3d": ImprovedUNet3D, "improved2d": ImprovedUNet2D, "unet2d": UNet2D}
 
 
 def build_model(name, num_classes):
-    """Create a model by name (``unet3d`` or ``unet2d``)."""
+    """Create a model by name (``unet3d``, ``improved2d`` or ``unet2d``)."""
     if name not in MODELS:
         raise ValueError(f"Unknown model {name!r}; choose from {list(MODELS)}")
     return MODELS[name](in_channels=1, num_classes=num_classes)
@@ -32,8 +32,8 @@ def predict_volume(model, image, model_name, slice_batch=32):
     """
     Class probabilities ``(C, D, H, W)`` for one volume ``image (1, D, H, W)``.
 
-    The 3D model sees the whole volume at once. The 2D baseline is run on
-    every axial slice independently and the slices are stacked back, so both
+    The 3D model sees the whole volume at once. The 2D models are run on
+    every axial slice independently and the slices are stacked back, so all
     models are scored on exactly the same voxels.
     """
     if model_name == "unet3d":

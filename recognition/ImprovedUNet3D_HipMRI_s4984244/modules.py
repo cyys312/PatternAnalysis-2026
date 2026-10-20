@@ -3,8 +3,11 @@ Network components and loss functions.
 
 * ``ImprovedUNet3D`` - the 3D Improved U-Net of Isensee et al. (2018), the
   model under study.
+* ``ImprovedUNet2D`` - the same architecture with 2D convolutions, applied
+  slice by slice. It differs from the 3D model only in whether a kernel sees
+  the neighbouring slices, so it isolates the effect of 3D context.
 * ``UNet2D`` - a standard 2D U-Net (Ronneberger et al., 2015) applied slice by
-  slice, used as the baseline.
+  slice, the conventional baseline.
 * ``DiceCELoss`` - soft multi-class Dice loss plus cross-entropy.
 
 All components are pure PyTorch.
@@ -16,29 +19,36 @@ import torch.nn.functional as F
 
 
 # ---------------------------------------------------------------------------
-# 3D Improved U-Net (Isensee et al., 2018)
+# Improved U-Net (Isensee et al., 2018), in 3D or 2D
 # ---------------------------------------------------------------------------
+# Every block takes ``dims`` (3 or 2) and picks the matching layer types, so
+# the 2D and 3D models share one definition.
 
-def norm_act(channels):
+def conv(dims, *args, **kwargs):
+    return (nn.Conv3d if dims == 3 else nn.Conv2d)(*args, **kwargs)
+
+
+def norm_act(channels, dims=3):
     """Instance norm followed by leaky ReLU (slope 0.01), as in the paper."""
-    return nn.Sequential(nn.InstanceNorm3d(channels, affine=True),
-                         nn.LeakyReLU(0.01, inplace=True))
+    norm = nn.InstanceNorm3d if dims == 3 else nn.InstanceNorm2d
+    return nn.Sequential(norm(channels, affine=True), nn.LeakyReLU(0.01, inplace=True))
 
 
 class ContextModule(nn.Module):
     """
-    Pre-activation residual block: two 3x3x3 convolutions with dropout
+    Pre-activation residual block: two 3x3(x3) convolutions with dropout
     in between. The block's input is added back by the caller.
     """
 
-    def __init__(self, channels, dropout=0.3):
+    def __init__(self, channels, dims=3, dropout=0.3):
         super().__init__()
+        drop = nn.Dropout3d if dims == 3 else nn.Dropout2d
         self.block = nn.Sequential(
-            norm_act(channels),
-            nn.Conv3d(channels, channels, 3, padding=1),
-            nn.Dropout3d(dropout),
-            norm_act(channels),
-            nn.Conv3d(channels, channels, 3, padding=1),
+            norm_act(channels, dims),
+            conv(dims, channels, channels, 3, padding=1),
+            drop(dropout),
+            norm_act(channels, dims),
+            conv(dims, channels, channels, 3, padding=1),
         )
 
     def forward(self, x):
@@ -46,12 +56,12 @@ class ContextModule(nn.Module):
 
 
 class EncoderLevel(nn.Module):
-    """3x3x3 convolution (stride 2 below the top level) + residual context."""
+    """3x3(x3) convolution (stride 2 below the top level) + residual context."""
 
-    def __init__(self, in_channels, out_channels, stride):
+    def __init__(self, in_channels, out_channels, stride, dims=3):
         super().__init__()
-        self.conv = nn.Conv3d(in_channels, out_channels, 3, stride=stride, padding=1)
-        self.context = ContextModule(out_channels)
+        self.conv = conv(dims, in_channels, out_channels, 3, stride=stride, padding=1)
+        self.context = ContextModule(out_channels, dims)
 
     def forward(self, x):
         x = self.conv(x)
@@ -59,14 +69,14 @@ class EncoderLevel(nn.Module):
 
 
 class UpsamplingModule(nn.Module):
-    """Nearest-neighbour x2 upscale, then a 3x3x3 conv that halves the features."""
+    """Nearest-neighbour x2 upscale, then a 3x3(x3) conv that halves the features."""
 
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, dims=3):
         super().__init__()
         self.block = nn.Sequential(
             nn.Upsample(scale_factor=2, mode="nearest"),
-            nn.Conv3d(in_channels, out_channels, 3, padding=1),
-            norm_act(out_channels),
+            conv(dims, in_channels, out_channels, 3, padding=1),
+            norm_act(out_channels, dims),
         )
 
     def forward(self, x):
@@ -74,56 +84,57 @@ class UpsamplingModule(nn.Module):
 
 
 class LocalisationModule(nn.Module):
-    """3x3x3 conv on the concatenated features, then a 1x1x1 conv halving them."""
+    """3x3(x3) conv on the concatenated features, then a 1x1(x1) conv halving them."""
 
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, dims=3):
         super().__init__()
         self.block = nn.Sequential(
-            nn.Conv3d(in_channels, in_channels, 3, padding=1),
-            norm_act(in_channels),
-            nn.Conv3d(in_channels, out_channels, 1),
-            norm_act(out_channels),
+            conv(dims, in_channels, in_channels, 3, padding=1),
+            norm_act(in_channels, dims),
+            conv(dims, in_channels, out_channels, 1),
+            norm_act(out_channels, dims),
         )
 
     def forward(self, x):
         return self.block(x)
 
 
-class ImprovedUNet3D(nn.Module):
+class ImprovedUNet(nn.Module):
     """
-    3D Improved U-Net.
+    Improved U-Net in ``dims`` = 3 or 2 dimensions.
 
     Encoder: five levels with ``base, 2*base, ..., 16*base`` features; each
     level is a (strided) convolution plus a residual context module.
     Decoder: upsampling modules, skip concatenation and localisation modules.
-    Deep supervision: 1x1x1 segmentation heads at the three finest decoder
+    Deep supervision: 1x1(x1) segmentation heads at the three finest decoder
     levels are upscaled and summed into the final logits.
 
-    Input ``(N, in_channels, D, H, W)`` with D, H, W divisible by 16.
-    Output logits ``(N, num_classes, D, H, W)``.
+    Input ``(N, in_channels, *spatial)`` with every spatial size divisible by
+    16. Output logits ``(N, num_classes, *spatial)``.
     """
 
-    def __init__(self, in_channels=1, num_classes=6, base=16):
+    def __init__(self, in_channels=1, num_classes=6, base=16, dims=3):
         super().__init__()
         f = [base * 2 ** i for i in range(5)]  # 16, 32, 64, 128, 256
+        self.upscale = "trilinear" if dims == 3 else "bilinear"
 
         self.encoders = nn.ModuleList(
-            [EncoderLevel(in_channels, f[0], stride=1)]
-            + [EncoderLevel(f[i - 1], f[i], stride=2) for i in range(1, 5)]
+            [EncoderLevel(in_channels, f[0], stride=1, dims=dims)]
+            + [EncoderLevel(f[i - 1], f[i], stride=2, dims=dims) for i in range(1, 5)]
         )
-        self.encoder_out = norm_act(f[4])
+        self.encoder_out = norm_act(f[4], dims)
 
         # Decoder, coarse to fine.
-        self.ups = nn.ModuleList([UpsamplingModule(f[i], f[i - 1]) for i in (4, 3, 2, 1)])
-        self.locs = nn.ModuleList([LocalisationModule(2 * f[i], f[i]) for i in (3, 2, 1)])
-        self.top = nn.Sequential(nn.Conv3d(2 * f[0], 2 * f[0], 3, padding=1),
-                                 norm_act(2 * f[0]))
+        self.ups = nn.ModuleList([UpsamplingModule(f[i], f[i - 1], dims) for i in (4, 3, 2, 1)])
+        self.locs = nn.ModuleList([LocalisationModule(2 * f[i], f[i], dims) for i in (3, 2, 1)])
+        self.top = nn.Sequential(conv(dims, 2 * f[0], 2 * f[0], 3, padding=1),
+                                 norm_act(2 * f[0], dims))
 
         # Segmentation heads at the 1/4, 1/2 and full-resolution decoder levels.
         self.seg_heads = nn.ModuleList([
-            nn.Conv3d(f[2], num_classes, 1),
-            nn.Conv3d(f[1], num_classes, 1),
-            nn.Conv3d(2 * f[0], num_classes, 1),
+            conv(dims, f[2], num_classes, 1),
+            conv(dims, f[1], num_classes, 1),
+            conv(dims, 2 * f[0], num_classes, 1),
         ])
 
     def forward(self, x):
@@ -140,8 +151,22 @@ class ImprovedUNet3D(nn.Module):
             if i >= 1:  # deep supervision from the three finest levels
                 head = self.seg_heads[i - 1](x)
                 seg = head if seg is None else head + F.interpolate(
-                    seg, scale_factor=2, mode="trilinear", align_corners=False)
+                    seg, scale_factor=2, mode=self.upscale, align_corners=False)
         return seg
+
+
+class ImprovedUNet3D(ImprovedUNet):
+    """3D Improved U-Net on whole volumes ``(N, C, D, H, W)``."""
+
+    def __init__(self, in_channels=1, num_classes=6, base=16):
+        super().__init__(in_channels, num_classes, base, dims=3)
+
+
+class ImprovedUNet2D(ImprovedUNet):
+    """The same network with 2D convolutions, on axial slices ``(N, C, H, W)``."""
+
+    def __init__(self, in_channels=1, num_classes=6, base=16):
+        super().__init__(in_channels, num_classes, base, dims=2)
 
 
 # ---------------------------------------------------------------------------
