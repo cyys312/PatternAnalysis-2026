@@ -54,8 +54,8 @@ show *where* a 3D model is safe to trust, not only its average Dice. It is accep
 an encoder–decoder with skip connections, pre-activation residual context modules (dropout 0.3),
 instance norm (batch size is only 2) and three summed deep-supervision heads; 9.47 M
 parameters. The baseline is a 2D U-Net (Ronneberger et al., 2015; 7.76 M parameters)
-trained on axial slices of the *same* volumes and restacked for evaluation, so the only
-difference is whether the convolutions see neighbouring slices. Loss is cross-entropy +
+trained on axial slices of the *same* volumes and restacked for evaluation, so the only difference is whether the convolutions see neighbouring slices (this later
+turned out not to hold; see *A controlled comparison* below). Loss is cross-entropy +
 foreground soft Dice for the severe class imbalance. Course concepts used: receptive fields
 of 2D vs 3D convolutions, skip connections, residual learning, normalisation, loss design for
 imbalance, and leakage-free evaluation.
@@ -106,8 +106,8 @@ volumes in `semantic_MRs/<patient>_Week<n>_LFOV.nii.gz` with labels in
 
 1. *Intensity:* each volume is z-score normalised. MR intensities have no physical unit and vary
    with scanner gain, so only relative contrast within a scan is meaningful.
-2. *Resampling to 128 × 128 × 128 (D × H × W):* the 128 acquired slices are kept and the in-plane
-   grid is halved (voxels ≈ 3.4 mm in-plane, 1.56 mm between slices). With a median of 25 prostate slices, halving the
+2. *Resampling to 128 × 128 × 128 (D × H × W):* the 128 acquired slices are kept (the single
+   144-slice scan is resampled to 128) and the in-plane grid is halved (voxels ≈ 3.4 mm in-plane, 1.56 mm between slices). With a median of 25 prostate slices, halving the
    slices as well would leave about four slices each for the apex and base — the very slices
    the research question is about. At this size the 3D model trains in 4 GB of GPU memory.
 3. *Labels* are resampled by averaging their one-hot encoding over each output voxel and taking
@@ -229,11 +229,20 @@ the best checkpoint absorbs. The 2D models peak early (2D Improved at epoch 19, 
 epoch 15). They were not under-trained: 50 2D epochs are 28,600 gradient steps (572 batches of 32
 slices per epoch), more than the 21,300 steps of the 3D model's 300 epochs.
 
-| 3D Improved U-Net | 2D Improved U-Net | 2D U-Net |
-|---|---|---|
-| ![3D training curves](images/curves_unet3d.png) | ![2D Improved training curves](images/curves_improved2d.png) | ![2D U-Net training curves](images/curves_unet2d.png) |
+*3D Improved U-Net:*
 
-**Segmentation accuracy** (test Dice, mean ± SD over three seeds / IoU):
+![3D training curves](images/curves_unet3d.png)
+
+*2D Improved U-Net:*
+
+![2D Improved training curves](images/curves_improved2d.png)
+
+*2D U-Net:*
+
+![2D U-Net training curves](images/curves_unet2d.png)
+
+**Segmentation accuracy** (test Dice, mean ± SD over three seeds / IoU; the 3D model is best on
+every class, and bold marks the classes where it leads both 2D models by more than 0.02):
 
 | Class | 3D Improved U-Net | 2D Improved U-Net | 2D U-Net |
 |---|---|---|---|
@@ -248,6 +257,9 @@ value is 0.712, a bladder). The 3D model is the most consistent across seeds; th
 rectum Dice alone varies by 0.026 between seeds, so one seed would not have been enough.
 
 ![Test Dice per class](images/dice_comparison.png)
+
+*Seed 3710: bars are means over the 34 test scans and error bars the standard deviation over
+scans, which is much larger than the seed-to-seed variation in the table.*
 
 **Example inputs and outputs** — the first scan of three test patients, axial slice through the
 centre of the prostate (anterior up) and sagittal slice (superior up). Colours: bone white,
@@ -272,7 +284,7 @@ from slice to slice.
 | Peak inference VRAM | 1.02 GB | 0.48 GB | 0.51 GB |
 
 The 3D model costs about four to six times the training time and memory of either 2D model,
-in line with the "5–10×" premise of the dilemma; at inference all three segment a volume in a
+at the lower end of the "5–10×" cost the dilemma assumes; at inference all three segment a volume in a
 few hundredths of a second.
 
 **Acceptance criteria** (from the feasibility review):
@@ -280,7 +292,7 @@ few hundredths of a second.
 | # | Criterion | Outcome |
 |---|---|---|
 | A1 | 3D Dice ≥ 0.70 on each foreground class | **Met** for every class, scan and seed |
-| A2 | 3D context improves apex and base Dice by ≥ 0.05, or lowers prostate HD95 | **Not met** on the test patients (apex −0.045, base +0.010, HD95 +0.10 mm vs the 2D Improved U-Net); see the dilemma section for the validation patients |
+| A2 | 3D context improves apex and base Dice by ≥ 0.05, or lowers prostate HD95 | **Not met** on the test patients, against either baseline: vs the 2D U-Net named in the plan, apex −0.021, base +0.023, HD95 −0.12 mm (p = 0.84 over patients); vs the 2D Improved U-Net, apex −0.045, base +0.010, HD95 +0.10 mm. See the dilemma section for the validation patients |
 | A3 | Leakage into rectum and bladder and beyond the gland is reported | **Met** |
 | A4 | ≤ 16 GB VRAM and ≤ 3 h training on one A100; inference ≤ 1 s | **Met** at 128³ (4.0 GB, 1.1–1.2 h, 0.03 s) |
 | A5 | No patient in two subsets; split and seed committed | **Met** |
@@ -289,8 +301,9 @@ few hundredths of a second.
 
 A planner does not care about the average overlap of a contour but about where it is wrong:
 at the apex and base, where the prostate meets the pelvic floor and the bladder neck, and at
-the thin interface with the rectum. Does through-plane context fix those errors, or does it only
-polish the easy mid-gland slices at about five times the training cost?
+the thin interface with the rectum. The brief asks whether 3D context genuinely removes these
+boundary errors or merely smooths easy central slices "while demanding 5–10× the GPU memory and
+training time".
 
 **A controlled comparison.** The feasibility plan treated the 2D U-Net as differing from the 3D
 model only in through-plane context. That is not true: the two also differ in residual blocks,
@@ -299,16 +312,25 @@ the 2D U-Net could come from the architecture. The **2D Improved U-Net** removes
 confound — it is the same network with 2D convolutions — and is the comparison used below; the
 2D U-Net is kept as the conventional baseline.
 
+**Order of the analysis.** The 2D Improved U-Net, the extra seeds, the post-processing control and
+the native-resolution experiment were all added after the first test results had been seen, so
+the test set was reused. They were chosen to challenge the 3D model's lead — a stronger 2D
+baseline of the same design and a free clean-up of the 2D output — not to favour it. They shrank
+most of it (the prostate and base gains over the 2D U-Net roughly halve against the 2D Improved
+U-Net, and much of the HD95 gap turns out to be fragments), although the rectum gap widened.
+The validation patients give a second look below.
+
 ### Global Dice hides the boundary failures
 
 ![Prostate Dice from apex to base](images/prostate_profile.png)
 
 Each axial slice of each test scan is placed by its relative position in the true gland
 (0 = apex, 1 = base) and scored separately. All three models reach about 0.91 Dice in the middle
-third but only 0.75–0.80 in the apex and base thirds, and roughly 0.5–0.6 on the outermost tenth
+third but only 0.75–0.82 in the apex and base thirds (across seeds), and roughly 0.5–0.6 on the outermost tenth
 of the slices. A global prostate Dice of 0.87 therefore averages a near-perfect mid-gland with
-end slices where about half of the contour is wrong. The right panel shows how often prostate is
-predicted on the slices just beyond the true gland.
+end slices where about half of the contour is wrong. The right panel shows, for the three slices
+just beyond each end of the true gland, the fraction on which prostate is predicted; the tables
+below instead count such slices per scan.
 
 ### Paired comparison on the test patients
 
@@ -344,7 +366,7 @@ inconsistent directions, not as proof.
   seed.
 - **The rectum is the most consistent gain:** +0.030 Dice over the 2D Improved U-Net, better in
   all six test patients, and +0.023 over the 2D U-Net.
-- **Most of the HD95 gap is stray fragments** — see the post-processing control below.
+- **Much of the HD95 gap is stray fragments** — see the post-processing control below.
 
 ### Validation patients: context prevents the worst failures
 
@@ -364,8 +386,9 @@ favours every model equally but means these numbers are not a clean held-out est
 The gap comes almost entirely from two patients, G021 and N010, in whom both 2D models miss large
 parts of the gland — mostly at the base — while the 3D model stays close to its usual accuracy;
 on the other four validation patients the three models are within about 0.07 of each other and
-the 3D model is not always best. Because only two of twelve held-out patients are affected, the
-per-patient tests are not significant (p = 0.31 for prostate Dice).
+the 3D model is not always best. Because only two of the twelve patients not used for training
+are affected, the per-patient tests over the six validation patients are not significant
+(Wilcoxon on patient means, p = 0.31 for prostate Dice against the 2D Improved U-Net).
 
 ![Validation failure cases](images/val_failures.png)
 
@@ -377,12 +400,23 @@ neighbouring slices.
 ### Post-processing control: largest connected component
 
 A slice-wise model's stray fragments could be removed by keeping only the largest connected
-piece of each organ (`predict.py --postprocess lcc`, seed 3710). After this step every model has
-exactly one prostate piece, and the 3D model's rectum HD95 advantage over the 2D Improved
-U-Net shrinks from 7.7 mm to 0.9 mm (p = 1.00 over patients): that advantage was fragments, and
-a one-line post-processing step recovers it. What survives the clean-up is the 3D model's lower
-spill beyond the gland (1.2 vs 1.8 slices; spill is the gland extending, not a separate piece),
-its bladder HD95 (−2.9 mm) and its rectum Dice (+0.023, p = 0.062 over patients).
+piece of each organ. `predict.py --postprocess lcc` does this for bladder, rectum and prostate
+(not bone, whose pelvis and femoral heads are legitimately separate pieces), giving removed
+voxels to their next most likely class. Since a deployed pipeline would include this free step,
+these are the numbers that matter (all three seeds, seed-averaged, 3D vs 2D Improved U-Net):
+
+| Test set | Without post-processing | With post-processing | p (patients), with |
+|---|---|---|---|
+| Rectum HD95 difference (mm) | −3.85 | −1.63 | 0.13 |
+| Bladder HD95 difference (mm) | −4.30 | −2.73 | 0.062 |
+| Slices with prostate beyond the gland (3D vs 2D Improved) | 1.13 vs 2.39 | 1.09 vs 2.37 | 0.31 |
+| Rectum Dice difference | +0.030 | +0.030 | 0.031 |
+| Prostate Dice difference | +0.009 | +0.010 | 0.56 |
+
+Post-processing removes much of the 3D model's HD95 advantage — that part was fragments — but
+not all of it. The 3D model's lower spill beyond the gland is untouched (spill is the gland
+extending, not a separate piece), and so is its rectum Dice lead, still better in all six test
+patients.
 
 ### Failure autopsy
 
@@ -397,8 +431,7 @@ patient where possible (red = false positive, blue = false negative prostate):
    *Trigger: resolution and partial volume, not missing context.*
 2. **Base — S035 week 0, slice 64.** The single-scan patient with the smallest gland in the test
    set (17.5 mL). At the base the reference is a one-voxel strip under the bladder; the 3D model
-   paints a blob the image does not separate from the bladder neck, and the 2D U-Net also over-
-   draws. *Trigger: a bladder-neck boundary the annotator judged but the intensities do not show.*
+   paints a blob the image does not separate from the bladder neck, and the 2D U-Net also over-draws. *Trigger: a bladder-neck boundary the annotator judged but the intensities do not show.*
 3. **Spill into the bladder — R016 week 7, slice 56.** On a slice above the gland the 3D model
    labels a large central region of the bladder as prostate (21.3 mL over-contoured in this
    scan), and the 2D Improved U-Net a smaller one, while the 2D U-Net is correct. The patient's
@@ -413,8 +446,7 @@ patient where possible (red = false positive, blue = false negative prostate):
    in the reference contour or the anatomy, in the clinically worst direction (rectal wall).*
 5. **Fragments — C032 week 0, slice 65.** Above the base the 2D Improved U-Net places a tiny
    prostate island on the floor of the bladder, one of four separate pieces in this scan; the 3D
-   model has none. This is the error that through-plane context prevents — and that a largest-
-   component step also removes.
+   model has none. This is the error that through-plane context prevents — and that a largest-component step also removes.
 6. **2D model fails — T009 week 0, slice 73.** At the base the 2D Improved U-Net extends the
    gland far beyond its boundary (slice Dice 0.48), while the 3D model follows it closely (0.94).
    A milder version of the validation failures above.
@@ -429,39 +461,43 @@ after the first test-set results had been seen, so it is exploratory. Each resol
 against its own resampled labels, so the two sets of numbers are comparable in direction but
 not to the third decimal.
 
-| Prostate (test set, seed 3710) | 3D 128³ | 3D native | 2D Improved native | 2D U-Net native |
-|---|---|---|---|---|
-| Dice, whole gland | 0.868 | 0.874 | 0.866 | 0.865 |
-| Dice, apex third | 0.762 | 0.773 | 0.811 | **0.841** |
-| Dice, base third | 0.776 | 0.741 | 0.773 | 0.762 |
-| Slices with prostate beyond the gland | 1.24 | **1.00** | 2.59 | 2.88 |
-| Rectum Dice | 0.880 | **0.894** | 0.875 | 0.875 |
-| Lowest single-scan Dice, any class | 0.712 | 0.651 | 0.740 | 0.725 |
-| Training time / peak VRAM | 1.1 h / 4.0 GB | 4.4 h / 15.8 GB | 1.0 h / 2.7 GB | 0.8 h / 3.3 GB |
+| Prostate (test set, seed 3710) | 3D 128³ | 3D native | 2D Impr. 128³ | 2D Impr. native | 2D U-Net 128³ | 2D U-Net native |
+|---|---|---|---|---|---|---|
+| Dice, whole gland | 0.868 | 0.874 | 0.865 | 0.866 | 0.865 | 0.865 |
+| Dice, apex third | 0.762 | 0.773 | 0.795 | 0.811 | 0.781 | **0.841** |
+| Dice, base third | 0.776 | 0.741 | 0.751 | 0.773 | 0.758 | 0.762 |
+| Slices with prostate beyond the gland | 1.24 | **1.00** | 1.85 | 2.59 | 1.94 | 2.88 |
+| Rectum Dice | 0.880 | **0.894** | 0.856 | 0.875 | 0.847 | 0.875 |
+| Lowest single-scan Dice, any class | 0.712 | 0.651 | 0.765 | 0.740 | 0.724 | 0.725 |
+| Training time / peak VRAM | 1.1 h / 4.0 GB | 4.4 h / 15.8 GB | 0.27 h / 0.7 GB | 1.0 h / 2.7 GB | 0.23 h / 0.9 GB | 0.8 h / 3.3 GB |
 
 ![Prostate Dice from apex to base at native resolution](images/native_prostate_profile.png)
 
-- **The apex responds to resolution in the 2D models only**, and their lead there is partly an
-  operating point: at native resolution they reach the last apex slices but paint prostate on
-  more than half of the slices just below the apex, while the 3D model stops early and rarely
-  spills. Neither ends where the gland ends.
-- **The base improves with neither** resolution nor context on the test patients.
-- **The same 3D advantages reappear at native resolution**: rectum (+0.018 over the 2D Improved
-  U-Net; rectum HD95 −1.5 mm, p = 0.031 over patients) and containment (1.0 vs 2.6 slices).
-- **Native 3D is not worth its cost:** four times the training time, a 16 GB GPU, and the only
-  configuration with a test scan below 0.70 (bladder 0.651).
+- **Only the 2D U-Net's apex clearly responds to resolution** (+0.060). The 2D Improved U-Net
+  (+0.016) and the 3D model (+0.011) barely change, so resolution is not a general fix for the
+  apex either. The 2D U-Net's apex gain is also partly an operating point: at native resolution
+  the 2D models reach the last apex slices but paint prostate on more than half of the slices
+  just below the apex, while the 3D model stops early and rarely spills.
+- **The base does not improve consistently** (3D −0.035, 2D Improved +0.022, 2D U-Net +0.004).
+- **The rectum improves with resolution for all three models**, and the 3D model keeps its lead
+  (+0.018 over the 2D Improved U-Net; rectum HD95 −1.5 mm, p = 0.031 over patients), as it does
+  for containment (1.0 vs 2.6 slices beyond the gland).
+- **Native 3D is not worth its cost:** 4.4 h of training exceeds the 3 h budget of criterion A4,
+  it needs a 16 GB GPU, and it is the only configuration with a test scan below 0.70 (bladder
+  0.651).
 
 ### Recommendation to the project manager
 
 1. **Use the 3D Improved U-Net at 128³ as the drafting model.** Against a 2D network of the same
    design it gives better rectum contours in every test patient, keeps the prostate inside the
-   gland more often, and — the strongest argument — did not collapse on the two validation
+   gland more often, and — the most clinically important point, though it rests on two patients —
+   did not collapse on the two validation
    patients where both 2D models missed large parts of the gland. Its cost is training-only:
    about one GPU-hour and 4 GB on one A100; inference is a few hundredths of a second for any
    model.
 2. **Do not expect 3D context to improve the prostate on typical patients.** On the test
-   patients its prostate Dice equals that of the 2D Improved U-Net, its apex is worse, and its
-   HD95 advantage over the 2D models is largely stray fragments that a largest-component step
+   patients its prostate Dice equals that of the 2D Improved U-Net, its apex is worse, and much of its
+   HD95 advantage over the 2D models is stray fragments that a largest-component step
    removes. Its value is robustness on atypical anatomy, not a better average.
 3. **Always post-process with a largest-connected-component step**, whichever model is used: it
    is free and removes stray pieces.
@@ -473,7 +509,10 @@ not to the third decimal.
 5. **Check the reference contours before more model work.** One week's reference gland is 21 %
    smaller than the same patient's other weeks (case 4), and patient C032's reference grows by
    42 % over treatment. Contouring consistency, or genuine swelling, limits every model here.
-6. **Treat these results as indicative.** They rest on six test and six validation patients and
+6. **Consider a 2.5D model next.** Feeding a 2D network a few neighbouring slices as input
+   channels would give some through-plane context at close to 2D cost — a natural middle ground
+   for this trade-off that was not tested here.
+7. **Treat these results as indicative.** They rest on six test and six validation patients and
    uncorrected tests; a cross-validated study over all 38 patients would be needed before
    clinical use.
 
