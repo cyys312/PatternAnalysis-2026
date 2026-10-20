@@ -150,6 +150,7 @@ voxels.
 | `predict.py` | evaluation of trained models on the test patients and all figures in this README |
 | `slurm/*.sh` | Rangpur batch jobs: `prepare_data.sh` (CPU), `train.sh` and `predict.sh` (one A100) |
 | `splits.json` | the committed patient split |
+| `requirements.txt` | the exact package versions above |
 
 **Dependencies.** Versions used for all reported results (conda environment on Rangpur,
 NVIDIA A100-PCIE-40GB):
@@ -163,7 +164,8 @@ NVIDIA A100-PCIE-40GB):
 | SciPy | 1.17.1 |
 | Matplotlib | 3.11.1 |
 
-`pip install torch nibabel scipy matplotlib` is enough. The model code (`modules.py`) uses only
+`pip install -r requirements.txt` installs exactly these versions (install a PyTorch build that
+matches your CUDA version first if needed). The model code (`modules.py`) uses only
 PyTorch; NumPy and SciPy are used in `predict.py` for evaluation and plotting.
 
 **Running on Rangpur.** From this folder (Slurm does not create the log folder itself):
