@@ -231,16 +231,13 @@ the best checkpoint absorbs. The 2D models peak early (2D Improved at epoch 19, 
 epoch 15). They were not under-trained: 50 2D epochs are 28,600 gradient steps (572 batches of 32
 slices per epoch), more than the 21,300 steps of the 3D model's 300 epochs.
 
-*3D Improved U-Net:*
-
+*3D Improved U-Net:*<br>
 ![3D training curves](images/curves_unet3d.png)
 
-*2D Improved U-Net:*
-
+*2D Improved U-Net:*<br>
 ![2D Improved training curves](images/curves_improved2d.png)
 
-*2D U-Net:*
-
+*2D U-Net:*<br>
 ![2D U-Net training curves](images/curves_unet2d.png)
 
 **Segmentation accuracy** (test Dice, mean ± SD over three seeds / IoU; the 3D model is best on
