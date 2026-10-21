@@ -434,7 +434,7 @@ lowered no scan's prostate Dice by more than 0.001 and no model's lowest single-
 One test case per failure type, chosen automatically by `predict.py` (seed 3710) from a different
 patient where possible (red = false positive, blue = false negative prostate):
 
-![Failure cases](images/failures.png)
+<img src="images/failures.png" alt="Failure cases" width="80%">
 
 1. **Apex — M013 week 4, slice 49.** The true apex is a 3–4-voxel island in front of the rectum;
    all three models miss it completely. At 3.4 mm in-plane voxels the tapering apex is barely
