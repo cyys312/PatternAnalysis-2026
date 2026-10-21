@@ -4,8 +4,10 @@ Network components and loss functions.
 * ``ImprovedUNet3D`` - the 3D Improved U-Net of Isensee et al. (2018), the
   model under study.
 * ``ImprovedUNet2D`` - the same architecture with 2D convolutions, applied
-  slice by slice. It differs from the 3D model only in whether a kernel sees
-  the neighbouring slices, so it isolates the effect of 3D context.
+  slice by slice. It differs from the 3D model mainly in whether a kernel sees
+  the neighbouring slices (it also has a third of the parameters and
+  normalises each slice rather than each volume), so it isolates the effect
+  of 3D context as far as an architecture can.
 * ``UNet2D`` - a standard 2D U-Net (Ronneberger et al., 2015) applied slice by
   slice, the conventional baseline.
 * ``DiceCELoss`` - soft multi-class Dice loss plus cross-entropy.

@@ -292,7 +292,7 @@ def plot_profiles(results, path, bins=10):
     ax.legend(fontsize=8, loc="upper right")
     ax.grid(alpha=0.3)
     ax_spill.set_xticks(range(2), ["below apex", "above base"])
-    ax_spill.set(ylabel="slices with predicted prostate", ylim=(0, 1),
+    ax_spill.set(ylabel="fraction of slices with predicted prostate", ylim=(0, 1),
                  title="Spill outside the gland")
     fig.tight_layout()
     fig.savefig(path, dpi=150)
