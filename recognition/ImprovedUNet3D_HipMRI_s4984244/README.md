@@ -255,8 +255,7 @@ Every model clears 0.70 Dice on every class of every test scan for every seed (t
 value is 0.712, a bladder). The 3D model is the most consistent across seeds; the 2D U-Net's
 rectum Dice alone varies by 0.026 between seeds, so one seed would not have been enough.
 
-![Test Dice per class](images/dice_comparison.png)
-
+![Test Dice per class](images/dice_comparison.png)<br>
 *Seed 3710: bars are means over the 34 test scans and error bars the standard deviation over
 scans, which is much larger than the seed-to-seed variation in the table.*
 
@@ -354,7 +353,7 @@ correlated; with 6 patients its smallest possible p is 0.031.
 | Bladder HD95 (mm) | 3.17 | 7.47 | −4.30 | < 0.001 | 0.062 | −4.44 | 0.062 |
 
 Bold rows: per-patient p = 0.031, the smallest possible, i.e. all six patients agree in
-direction. These are 20 per-patient tests on 6 patients and no correction for multiple comparisons is
+direction (before post-processing; after it, only the rectum Dice row stays at p = 0.031). These are 20 per-patient tests on 6 patients and no correction for multiple comparisons is
 applied; with a Bonferroni correction none of the per-patient tests would be significant (the
 per-scan tests treat correlated weekly scans as independent and overstate the evidence). They are read as consistent or
 inconsistent directions, not as proof.
@@ -392,8 +391,7 @@ the 3D model is not always best. Because only two of the twelve patients not use
 are affected, the per-patient tests over the six validation patients are not significant
 (Wilcoxon on patient means, p = 0.31 for prostate Dice against the 2D Improved U-Net).
 
-![Validation failure cases](images/val_failures.png)
-
+![Validation failure cases](images/val_failures.png)<br>
 *Validation patients, seed 3710; same six case types as the test gallery below.*
 
 The bottom row (*baseline fails*, G021 week 0) shows the effect: on a slice where the gland's
@@ -424,7 +422,10 @@ these are the numbers that matter (all three seeds, seed-averaged, 3D vs 2D Impr
 Post-processing removes much of the 3D model's HD95 advantage — that part was fragments — but
 not all of it. The 3D model's lower spill beyond the gland is untouched (spill is the gland
 extending, not a separate piece), and so is its rectum Dice lead, still better in all six test
-patients. The A2 quantities do not change: criterion A2 is not met with post-processing either.
+patients. The apex and base Dice do not change, and the prostate HD95 difference moves from
++0.10 to −0.11 mm (p = 0.84), far below one voxel, so criterion A2 is not met against the
+2D Improved U-Net with post-processing either; against the 2D U-Net, with post-processing,
+the differences are apex −0.021, base +0.022 and HD95 −0.08 mm (p = 0.84), so not there either.
 Keeping the wrong piece (a stray piece larger than the gland) never happened: post-processing
 lowered no scan's prostate Dice by more than 0.001 and no model's lowest single-scan Dice.
 
@@ -482,8 +483,7 @@ not to the third decimal.
 | Lowest single-scan Dice, any class | 0.712 | 0.651 | 0.765 | 0.740 | 0.724 | 0.725 |
 | Training time / peak VRAM | 1.1 h / 4.0 GB | 4.4 h / 15.8 GB | 0.27 h / 0.7 GB | 1.0 h / 2.7 GB | 0.23 h / 0.9 GB | 0.8 h / 3.3 GB |
 
-![Prostate Dice from apex to base at native resolution](images/native_prostate_profile.png)
-
+![Prostate Dice from apex to base at native resolution](images/native_prostate_profile.png)<br>
 *Native resolution (128 × 256 × 256), seed 3710.*
 
 - **Only the 2D U-Net's apex clearly responds to resolution** (+0.060). The 2D Improved U-Net
